@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2014-2020 Deciso B.V.
+ * Copyright (C) 2014-2021 Deciso B.V.
  * Copyright (C) 2010 Seth Mos <seth.mos@dds.nl>
  * All rights reserved.
  *
@@ -49,15 +49,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     do_input_validation($pconfig, $reqdfields, $reqdfieldsn, $input_errors);
 
-    if (!isset($pconfig['name'])) {
+    if (empty($pconfig['name'])) {
         $input_errors[] = gettext("A valid gateway name must be specified.");
-    }
-
-    $valid = is_validaliasname($pconfig['name']);
-    if ($valid === false) {
+    } elseif (!isset($id) && !preg_match('/^[a-zA-Z0-9_\-]{1,32}$/', $pconfig['name'])) {
         $input_errors[] = sprintf(gettext('The name must be less than 32 characters long and may only consist of the following characters: %s'), 'a-z, A-Z, 0-9, _');
-    } elseif ($valid === null) {
-        $input_errors[] = sprintf(gettext('The name cannot be the internally reserved keyword "%s".'), $pconfig['name']);
     }
 
     /* skip system gateways which have been automatically added */
@@ -76,13 +71,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if (!empty($pconfig['gateway']) && is_ipaddr($pconfig['gateway'])) {
         if (is_ipaddrv4($pconfig['gateway'])) {
-            list ($parent_ip, $parent_sn) = explode('/', find_interface_network(get_real_interface($pconfig['interface']), false));
+            list ($parent_ip, $parent_net, $parent_sn) = interfaces_primary_address($pconfig['interface']);
             $parent_ip = empty($pconfig['ajaxip']) ? $parent_ip : $pconfig['ajaxip'];
             $parent_sn = empty($pconfig['ajaxnet']) ? $parent_sn : $pconfig['ajaxnet'];
             if (empty($parent_ip) || empty($parent_sn)) {
                 $input_errors[] = gettext("Cannot add IPv4 Gateway Address because no IPv4 address could be found on the interface.");
             } else {
-                $subnets = array(gen_subnet($parent_ip, $parent_sn) . "/" . $parent_sn);
+                $subnets = [$parent_net];
                 foreach ($vips as $vip) {
                     if (!is_ipaddrv4($vip['subnet'])) {
                         continue;
@@ -106,13 +101,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif (is_ipaddrv6($pconfig['gateway'])) {
             /* do not do a subnet match on a link local address, it's valid */
             if (!is_linklocal($pconfig['gateway'])) {
-                list ($parent_ip, $parent_sn) = explode('/', find_interface_networkv6(get_real_interface($pconfig['interface'], 'inet6'), false));
+                list ($parent_ip, $parent_net, $parent_sn) = interfaces_primary_address6($pconfig['interface']);
                 $parent_ip = empty($pconfig['ajaxip']) ? $parent_ip : $pconfig['ajaxip'];
                 $parent_sn = empty($pconfig['ajaxnet']) ? $parent_sn : $pconfig['ajaxnet'];
                 if (empty($parent_ip) || empty($parent_sn)) {
                     $input_errors[] = gettext("Cannot add IPv6 Gateway Address because no IPv6 address could be found on the interface.");
                 } else {
-                    $subnets = array(gen_subnetv6($parent_ip, $parent_sn) . "/" . $parent_sn);
+                    $subnets = [$parent_net];
                     foreach ($vips as $vip) {
                         if (!is_ipaddrv6($vip['subnet'])) {
                             continue;
@@ -436,6 +431,15 @@ include("head.inc");
 <script>
 //<![CDATA[
 $( document ).ready(function() {
+    $("#ipprotocol").change(function () {
+        if ($("#ipprotocol").val() == 'inet6') {
+            $("#fargw_opts").hide();
+        } else {
+            $("#fargw_opts").show();
+        }
+    });
+    $("#ipprotocol").change();
+
     // unhide advanced
     $("#btn_advanced").click(function(event){
         event.preventDefault();
@@ -515,7 +519,7 @@ $( document ).ready(function() {
                 <tr>
                   <td><a id="help_for_ipprotocol" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Address Family"); ?></td>
                   <td>
-                    <select name='ipprotocol' class="selectpicker" data-style="btn-default" >
+                    <select id="ipprotocol" name="ipprotocol" class="selectpicker" data-style="btn-default" >
                       <option value="inet" <?=$pconfig['ipprotocol'] == 'inet' ? "selected='selected'" : "";?>>
                           <?=gettext("IPv4");?>
                       </option>
@@ -543,7 +547,7 @@ $( document ).ready(function() {
                     </div>
                   </td>
                 </tr>
-                <tr>
+                <tr id="fargw_opts">
                   <td><a id="help_for_fargw" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Far Gateway"); ?></td>
                   <td>
                     <input name="fargw" type="checkbox" value="yes" <?=!empty($pconfig['fargw']) ? 'checked="checked"' : '';?> />

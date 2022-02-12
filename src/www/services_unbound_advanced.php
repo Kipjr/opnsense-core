@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2014-2016 Deciso B.V.
+ * Copyright (C) 2014-2021 Deciso B.V.
  * Copyright (C) 2011 Warren Baker <warren@decoy.co.za>
  * All rights reserved.
  *
@@ -49,23 +49,25 @@ $copy_fields = array(
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig = array();
+
     // set defaults
     $pconfig['incoming_num_tcp'] = 10;
-    $pconfig['outgoing_num_tcp'] = 10;
+    $pconfig['infra_cache_numhosts'] = 10000;
     $pconfig['infra_host_ttl'] = 900;
     $pconfig['jostle_timeout'] = 200;
-    $pconfig['infra_cache_numhosts'] = 10000;
+    $pconfig['log_verbosity'] = '1';
     $pconfig['num_queries_per_thread'] = 4096;
-    $pconfig['log_verbosity'] = "1";
+    $pconfig['outgoing_num_tcp'] = 10;
 
     // boolean fields
+    $pconfig['dnssecstripped'] = isset($config['unbound']['dnssecstripped']);
     $pconfig['extended_statistics'] = isset($config['unbound']['extended_statistics']);
-    $pconfig['log_queries'] = isset($config['unbound']['log_queries']);
     $pconfig['hideidentity'] = isset($config['unbound']['hideidentity']);
     $pconfig['hideversion'] = isset($config['unbound']['hideversion']);
+    $pconfig['log_queries'] = isset($config['unbound']['log_queries']);
     $pconfig['prefetch'] = isset($config['unbound']['prefetch']);
     $pconfig['prefetchkey'] = isset($config['unbound']['prefetchkey']);
-    $pconfig['dnssecstripped'] = isset($config['unbound']['dnssecstripped']);
+    $pconfig['qnameminstrict'] = isset($config['unbound']['qnameminstrict']);
     $pconfig['serveexpired'] = isset($config['unbound']['serveexpired']);
 
     // text fields
@@ -77,33 +79,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
     }
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!empty($_POST['apply'])) {
-        unbound_configure_do();
-        plugins_configure('dhcp');
-        clear_subsystem_dirty('unbound');
-        header(url_safe('Location: /services_unbound_advanced.php'));
-        exit;
-    } else {
-        $pconfig = $_POST;
-        // boolean fields
-        $config['unbound']['extended_statistics'] = !empty($pconfig['extended_statistics']);
-        $config['unbound']['log_queries'] = !empty($pconfig['log_queries']);
-        $config['unbound']['hideidentity'] = !empty($pconfig['hideidentity']);
-        $config['unbound']['hideversion'] = !empty($pconfig['hideversion']);
-        $config['unbound']['prefetch'] = !empty($pconfig['prefetch']);
-        $config['unbound']['prefetchkey'] = !empty($pconfig['prefetchkey']);
-        $config['unbound']['dnssecstripped'] = !empty($pconfig['dnssecstripped']);
-        $config['unbound']['serveexpired'] = !empty($pconfig['serveexpired']);
-        // text fields
-        foreach ($copy_fields as $fieldname) {
-            $config['unbound'][$fieldname] = $pconfig[$fieldname];
-        }
+    $pconfig = $_POST;
 
-        write_config('Unbound advanced configuration changed.');
-        mark_subsystem_dirty('unbound');
-        header(url_safe('Location: /services_unbound_advanced.php'));
-        exit;
+    // boolean fields
+    $config['unbound']['dnssecstripped'] = !empty($pconfig['dnssecstripped']);
+    $config['unbound']['extended_statistics'] = !empty($pconfig['extended_statistics']);
+    $config['unbound']['hideidentity'] = !empty($pconfig['hideidentity']);
+    $config['unbound']['hideversion'] = !empty($pconfig['hideversion']);
+    $config['unbound']['log_queries'] = !empty($pconfig['log_queries']);
+    $config['unbound']['prefetch'] = !empty($pconfig['prefetch']);
+    $config['unbound']['prefetchkey'] = !empty($pconfig['prefetchkey']);
+    $config['unbound']['qnameminstrict'] = !empty($pconfig['qnameminstrict']);
+    $config['unbound']['serveexpired'] = !empty($pconfig['serveexpired']);
+
+    // text fields
+    foreach ($copy_fields as $fieldname) {
+        $config['unbound'][$fieldname] = $pconfig[$fieldname];
     }
+
+    write_config('Unbound advanced configuration changed.');
+
+    unbound_configure_do();
+    clear_subsystem_dirty('unbound');
+
+    header(url_safe('Location: /services_unbound_advanced.php'));
+    exit;
 }
 
 
@@ -117,9 +117,6 @@ include_once("head.inc");
   <section class="page-content-main">
     <div class="container-fluid">
       <div class="row">
-        <?php if (is_subsystem_dirty('unbound')): ?>
-        <?php print_info_box_apply(gettext('The Unbound configuration has been changed.') . ' ' . gettext('You must apply the changes in order for them to take effect.')) ?>
-        <?php endif; ?>
         <section class="col-xs-12">
           <div class="tab-content content-box col-xs-12">
               <form method="post" name="iform" id="iform">
@@ -184,6 +181,18 @@ include_once("head.inc");
                           <input name="serveexpired" type="checkbox" id="serveexpired" value="yes" <?= empty($pconfig['serveexpired']) ? '' : 'checked="checked"' ?> />
                           <div class="hidden" data-for="help_for_serveexpired">
                             <?= gettext('Serve expired responses from the cache with a TTL of 0 without waiting for the actual resolution to finish.') ?>
+                          </div>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td><a id="help_for_qnameminstrict" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?= gettext('Strict QNAME minimisation') ?></td>
+                        <td>
+                          <input name="qnameminstrict" type="checkbox" id="qnameminstrict" value="yes" <?= empty($pconfig['qnameminstrict']) ? '' : 'checked="checked"' ?> />
+                          <div class="hidden" data-for="help_for_qnameminstrict">
+                            <?= gettext('Send minimum amount of information to upstream servers to enhance privacy. ' .
+                                  'Do not fall-back to sending full QNAME to potentially broken nameservers. ' .
+                                  'A lot of domains will not be resolvable when this option in enabled. ' .
+                                  'Only use if you  know  what you are doing.') ?>
                           </div>
                         </td>
                       </tr>
@@ -349,7 +358,7 @@ include_once("head.inc");
                           endfor;?>
                           </select>
                           <div class="hidden" data-for="help_for_log_verbosity">
-                            <?= gettext("Select the log verbosity. Level 0 means no verbosity, only errors. Level 1 gives operational information. Level 2 gives detailed operational information. Level 3 gives query level information, output per query. Level 4 gives algorithm level information. Level 5 logs client identification for cache misses. Default is level 1. ") ?>
+                            <?= gettext('Select the log verbosity. Level 0 means no verbosity, only errors. Level 1 gives operational information. Level 2 gives detailed operational information. Level 3 gives query level information, output per query. Level 4 gives algorithm level information. Level 5 logs client identification for cache misses. Default is level 1.') ?>
                           </div>
                         </td>
                       </tr>

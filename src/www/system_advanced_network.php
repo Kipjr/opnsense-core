@@ -36,7 +36,7 @@ require_once("system.inc");
 
 function get_mac_address($ip)
 {
-    $macs = array();
+    $macs = [];
 
     exec(exec_safe('/usr/sbin/arp -an | grep %s | awk \'{ print $4 }\'', $ip), $macs);
 
@@ -108,9 +108,9 @@ function format_duid($duid)
 {
     $values = explode(':', strtoupper(str_replace('-', ':', $duid)));
 
-    array_walk($values, function(&$value) {
+    foreach ($values as &$value) {
         $value = str_pad($value, 2, '0', STR_PAD_LEFT);
-    });
+    };
 
     return implode(':', $values);
 }
@@ -170,7 +170,7 @@ function read_duid()
 $duid = read_duid();
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $pconfig = array();
+    $pconfig = [];
     $pconfig['disablechecksumoffloading'] = isset($config['system']['disablechecksumoffloading']);
     $pconfig['disablesegmentationoffloading'] = isset($config['system']['disablesegmentationoffloading']);
     $pconfig['disablelargereceiveoffloading'] = isset($config['system']['disablelargereceiveoffloading']);
@@ -184,7 +184,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig['ipv6_duid_uuid_value'] = generate_new_duid('3');
     $pconfig['ipv6_duid_en_value'] = generate_new_duid('4');
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $input_errors = array();
+    $input_errors = [];
     $pconfig = $_POST;
 
     if (!empty($pconfig['ipv6duid']) && !is_duid($pconfig['ipv6duid'])) {
@@ -235,7 +235,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
 
         if (!empty($pconfig['ipv6duid'])) {
-            $config['system']['ipv6duid'] = format_duid($pconfig['ipv6duid']);
+            $config['system']['ipv6duid'] = $pconfig['ipv6duid'] = format_duid($pconfig['ipv6duid']);
         } elseif (isset($config['system']['ipv6duid'])) {
             unset($config['system']['ipv6duid']);
             /* clear the file as this means auto-generate */
@@ -246,7 +246,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         write_config();
         interface_dhcpv6_configure('duidonly', null); /* XXX refactor */
-        system_arp_wrong_if();
+        system_sysctl_configure();
     }
 }
 
@@ -339,6 +339,11 @@ include("head.inc");
                   </div>
                 </td>
               </tr>
+              <tr>
+                <td colspan="2">
+                  <?= gettext('Please note that offloading settings only apply to configured interfaces, so when using e.g. VLAN interfaces make sure to assign and enable the parent as well.') ?>
+                </td>
+              </tr>
             </table>
           </div>
           <div class="content-box tab-content table-responsive __mb">
@@ -388,8 +393,8 @@ include("head.inc");
                   <div class="hidden" data-for="help_for_persistent_duid">
                     <?= gettext('This field can be used to enter an explicit DUID for use by IPv6 DHCP clients.') ?><br/>
                     <?= gettext('The correct format for each DUID type is as follows, all entries to be in hex format "xx" separated by a colon.') ?><br/>
-                    <?= gettext('LLT: 4 bytes "00:01:00:01" followed by 4 bytes Unix time e.g. "00:01:02:03", followed by six bytes of the MAC address.') ?><br/>
-                    <?= gettext('LL: 4 bytes "00:03:00:01" followed by 4 bytes Unix time e.g. "00:01:02:03".') ?><br/>
+                    <?= gettext('LLT: 4 bytes "00:01:00:01" followed by 4 bytes Unix time e.g. "00:01:02:03", followed by 6 bytes of the MAC address.') ?><br/>
+                    <?= gettext('LL: 4 bytes "00:03:00:01" followed by 6 bytes of the MAC address.') ?><br/>
                     <?= gettext('UUID: 4 bytes "00:00:00:04" followed by 8 bytes of a universally unique identifier.') ?><br/>
                     <?= gettext('EN: 2 bytes "00:02" followed by 4 bytes of the enterprise number e.g. "00:00:00:01", ' .
                             'followed by a variable length identifier of hex values up to 122 bytes in length.') ?>

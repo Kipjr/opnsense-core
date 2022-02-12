@@ -49,6 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig['strictbind'] = isset($a_dnsmasq['strictbind']);
     $pconfig['dnssec'] = isset($a_dnsmasq['dnssec']);
     $pconfig['log_queries'] = isset($a_dnsmasq['log_queries']);
+    $pconfig['no_hosts'] = isset($a_dnsmasq['no_hosts']);
     // simple text types
     $pconfig['port'] = !empty($a_dnsmasq['port']) ? $a_dnsmasq['port'] : "";
     // arrays
@@ -81,6 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $a_dnsmasq['domain_needed'] = !empty($pconfig['domain_needed']);
             $a_dnsmasq['no_private_reverse'] = !empty($pconfig['no_private_reverse']);
             $a_dnsmasq['log_queries'] = !empty($pconfig['log_queries']);
+            $a_dnsmasq['no_hosts'] = !empty($pconfig['no_hosts']);
             $a_dnsmasq['strictbind'] = !empty($pconfig['strictbind']);
             $a_dnsmasq['dnssec'] = !empty($pconfig['dnssec']);
             if (!empty($pconfig['regdhcpdomain'])) {
@@ -356,6 +358,13 @@ $( document ).ready(function() {
                   </td>
                 </tr>
                 <tr>
+                  <td><i class="fa fa-info-circle text-muted"></i> <?=gettext('No Hosts Lookup') ?></td>
+                  <td>
+                    <input name="no_hosts" type="checkbox" id="no_hosts" value="yes" <?= !empty($pconfig['no_hosts']) ? 'checked="checked"' : '' ?> />
+                    <?= gettext('Don\'t read the hostnames in /etc/hosts.') ?>
+                  </td>
+                </tr>
+                <tr>
                   <td><i class="fa fa-info-circle text-muted"></i> <?=gettext('Log Queries') ?></td>
                   <td>
                     <input name="log_queries" type="checkbox" id="log_queries" value="yes" <?= !empty($pconfig['log_queries']) ? 'checked="checked"' : '' ?> />
@@ -387,7 +396,7 @@ $( document ).ready(function() {
                   <td><strong><?= gettext('IP') ?></strong></td>
                   <td><strong><?= gettext('Description') ?></strong></td>
                   <td class="text-nowrap">
-                    <a href="services_dnsmasq_edit.php" class="btn btn-default btn-xs"><i class="fa fa-plus fa-fw"></i></a>
+                    <a href="services_dnsmasq_edit.php" class="btn btn-primary btn-xs"><i class="fa fa-plus fa-fw"></i></a>
                   </td>
                 </tr>
 <?php foreach (config_read_array('dnsmasq', 'hosts') as $i => $hostent): ?>
@@ -439,7 +448,7 @@ $( document ).ready(function() {
                   <td><strong><?= gettext('IP') ?></strong></td>
                   <td><strong><?= gettext('Description') ?></strong></td>
                   <td class="text-nowrap">
-                    <a href="services_dnsmasq_domainoverride_edit.php" class="btn btn-default btn-xs">
+                    <a href="services_dnsmasq_domainoverride_edit.php" class="btn btn-primary btn-xs">
                       <i class="fa fa-plus fa-fw"></i>
                     </a>
                   </td>

@@ -52,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             $authName = 'Local Database';
         }
 
-        $authFactory = new OPNsense\Auth\AuthenticationFactory;
+        $authFactory = new OPNsense\Auth\AuthenticationFactory();
         $authenticator = $authFactory->get($authName);
         if ($authenticator->authenticate($_POST['username'], $_POST['password'])) {
             $savemsg = gettext("User") . ": " . $_POST['username'] . " " . gettext("authenticated successfully.");
@@ -68,10 +68,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 if (is_array($attr_value)) {
                     $attr_value = implode(",", $attr_value);
                 }
-                $savemsg .= "{$attr_name} => {$attr_value}<br/>";
+                $attr_value = str_replace("\n", "<br/>", htmlspecialchars($attr_value));
+                $savemsg .= htmlspecialchars($attr_name) . " => {$attr_value}<br/>";
             }
         } else {
             $input_errors[] = gettext("Authentication failed.");
+            foreach ($authenticator->getLastAuthErrors() as $err_name => $err_value) {
+                if (is_array($err_value)) {
+                    $err_value = implode(",", $err_value);
+                }
+                $input_errors[] = "{$err_name}: {$err_value}";
+            }
         }
     }
 }
@@ -113,7 +120,7 @@ include("head.inc");
                 </tr>
                 <tr>
                   <td style="width:22%"><?=gettext("Password"); ?></td>
-                  <td style="width:78%"><input type="password" name="password" value="<?=htmlspecialchars($pconfig['password']);?>"></td>
+                  <td style="width:78%"><input type="password" autocomplete="new-password" name="password" value="<?=htmlspecialchars($pconfig['password']);?>"></td>
                 </tr>
                 <tr>
                   <td style="width:22%">&nbsp;</td>

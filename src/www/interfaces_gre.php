@@ -30,25 +30,17 @@
 require_once("guiconfig.inc");
 require_once("interfaces.inc");
 
-function gre_inuse($gre_intf) {
-    foreach (legacy_config_get_interfaces() as $if => $intf) {
-        if ($intf['if'] == $gre_intf) {
-            return true;
-        }
-    }
-    return false;
-}
-
 $a_gres = &config_read_array('gres', 'gre') ;
+$a_aliaslist = get_configured_ip_aliases_list();
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $input_errors = array();
+    $input_errors = [];
     if (!empty($a_gres[$_POST['id']])) {
         $id = $_POST['id'];
     }
 
     if (!empty($_POST['action']) && $_POST['action'] == "del" && isset($id)) {
-        if (gre_inuse($a_gres[$id]['greif'])) {
+        if (is_interface_assigned($a_gres[$id]['greif'])) {
             $input_errors[] = gettext("This GRE tunnel cannot be deleted because it is still being used as an interface.");
         } else {
             mwexec("/sbin/ifconfig " . escapeshellarg($a_gres[$id]['greif']) . " destroy");
@@ -62,13 +54,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 
 include("head.inc");
+
 legacy_html_escape_form_data($a_gres);
-$main_buttons = array(
-  array('href'=>'interfaces_gre_edit.php', 'label'=>gettext('Add')),
-);
 
 ?>
-
 <body>
   <script>
   $( document ).ready(function() {
@@ -116,7 +105,11 @@ $main_buttons = array(
                       <th><?=gettext("Interface");?></th>
                       <th><?=gettext("Tunnel to...");?></th>
                       <th><?=gettext("Description");?></th>
-                      <th>&nbsp;</th>
+                      <th class="text-nowrap">
+                        <a href="interfaces_gre_edit.php" class="btn btn-primary btn-xs" data-toggle="tooltip" title="<?= html_safe(gettext('Add')) ?>">
+                          <i class="fa fa-plus fa-fw"></i>
+                        </a>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -126,13 +119,16 @@ $main_buttons = array(
                     <tr>
                       <td>
 <?php
-                      if (is_ipaddr($gre['if'])):?>
-                        [<?=htmlspecialchars($gre['if']);?>]
-<?php
-                      else:?>
-                        <?=htmlspecialchars(convert_friendly_interface_to_friendly_descr($gre['if']));?>
-<?php
-                      endif;?>
+$interface = explode('_vip', $gre['if'])[0]; /* required for fallback if alias does not exist */
+if (is_ipaddr($gre['if'])) {
+    foreach ($a_aliaslist as $ip => $int) {
+        if ($ip == $gre['if']) {
+            $interface = $int;
+            break;
+        }
+    }
+} ?>
+                        <?= html_safe(convert_friendly_interface_to_friendly_descr($interface)) ?>
                       </td>
                       <td><?=$gre['remote-addr'];?></td>
                       <td><?=$gre['descr'];?></td>

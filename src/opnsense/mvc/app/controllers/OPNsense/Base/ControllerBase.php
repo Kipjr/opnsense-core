@@ -120,6 +120,7 @@ class ControllerBase extends ControllerRoot
     {
         // set base template
         $this->view->setTemplateBefore('default');
+        $this->view->session = $this->session;
     }
 
     /**
@@ -178,7 +179,8 @@ class ControllerBase extends ControllerRoot
         $cnf = Config::getInstance();
 
         $this->view->setVar('lang', $this->translator);
-        $this->view->menuSystem = $menu->getItems($this->router->getRewriteUri());
+        $rewrite_uri = explode("?", $_SERVER["REQUEST_URI"])[0];
+        $this->view->menuSystem = $menu->getItems($rewrite_uri);
         /* XXX generating breadcrumbs requires getItems() call */
         $this->view->menuBreadcrumbs = $menu->getBreadcrumbs();
 
@@ -194,7 +196,7 @@ class ControllerBase extends ControllerRoot
         }
 
         // parse product properties, use template (.in) when not found
-        $firmware_product_fn =  __DIR__ . '/../../../../../version/core';
+        $firmware_product_fn = __DIR__ . '/../../../../../version/core';
         $firmware_product_fn = !is_file($firmware_product_fn) ? $firmware_product_fn . ".in" : $firmware_product_fn;
         $product_vars = json_decode(file_get_contents($firmware_product_fn), true);
         foreach ($product_vars as $product_key => $product_var) {
@@ -232,7 +234,7 @@ class ControllerBase extends ControllerRoot
             if (empty($policies[$policy_name])) {
                 $policies[$policy_name] = "";
             }
-            $policies[$policy_name] .=  " {$policy_content}";
+            $policies[$policy_name] .= " {$policy_content}";
         }
         $csp = "";
         foreach ($policies as $policy_name => $policy) {

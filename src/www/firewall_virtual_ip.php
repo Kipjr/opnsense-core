@@ -53,11 +53,11 @@ function deleteVIPEntry($id) {
     }
 
     if (is_ipaddrv6($a_vip[$id]['subnet'])) {
-        $if_subnet = find_interface_networkv6(get_real_interface($a_vip[$id]['interface'], 'inet6'));
+        list (, $if_subnet) = interfaces_primary_address6($a_vip[$id]['interface']);
         $subnet = gen_subnetv6($a_vip[$id]['subnet'], $a_vip[$id]['subnet_bits']);
         $is_ipv6 = true;
     } else {
-        $if_subnet = find_interface_network(get_real_interface($a_vip[$id]['interface']));
+        list (, $if_subnet) = interfaces_primary_address($a_vip[$id]['interface']);
         $subnet = gen_subnet($a_vip[$id]['subnet'], $a_vip[$id]['subnet_bits']);
         $is_ipv6 = false;
     }
@@ -167,10 +167,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 include("head.inc");
 
-$main_buttons = array(
-    array('href'=>'firewall_virtual_ip_edit.php', 'label'=>gettext('Add')),
-);
-
 ?>
 <body>
   <script>
@@ -259,7 +255,17 @@ $main_buttons = array(
                     <td><?=gettext("Interface");?></td>
                     <td><?=gettext("Type");?></td>
                     <td><?=gettext("Description");?></td>
-                    <td></td>
+                    <td>
+                      <a href="firewall_virtual_ip_edit.php" class="btn btn-primary btn-xs" data-toggle="tooltip" title="<?= html_safe(gettext('Add')) ?>">
+                        <i class="fa fa-plus fa-fw"></i> <?= $button['label'] ?>
+                      </a>
+                      <a type="submit" id="move_<?= count($a_vip) ?>" name="move_<?= count($a_vip) ?>_x" data-toggle="tooltip" title="<?= html_safe(gettext("Move selected virtual IPs to end")) ?>" class="act_move btn btn-default btn-xs">
+                        <i class="fa fa-arrow-left fa-fw"></i>
+                      </a>
+                      <a id="del_x" title="<?= html_safe(gettext('delete selected virtual IPs')) ?>" data-toggle="tooltip" class="btn btn-default btn-xs">
+                        <i class="fa fa-trash fa-fw"></i>
+                      </a>
+                    </td>
                   </tr>
                 </thead>
                 <tbody>
@@ -311,18 +317,6 @@ $main_buttons = array(
                       $i++;
                     endforeach;
                       ?>
-                    <?php ?>
-                  <tr>
-                    <td colspan="5"></td>
-                    <td>
-                      <a type="submit" id="move_<?=$i;?>" name="move_<?=$i;?>_x" data-toggle="tooltip" title="<?= html_safe(gettext("Move selected virtual IPs to end")) ?>" class="act_move btn btn-default btn-xs">
-                        <span class="fa fa-arrow-left fa-fw"></span>
-                      </a>
-                      <a id="del_x" title="<?= html_safe(gettext('delete selected virtual IPs')) ?>" data-toggle="tooltip"  class="btn btn-default btn-xs">
-                        <span class="fa fa-trash fa-fw"></span>
-                      </a>
-                    </td>
-                  </tr>
                 </tbody>
               </table>
             </form>

@@ -63,8 +63,6 @@ function restore_config_section($section_name, $new_contents)
     write_config(sprintf('Restored section %s of config file', $section_name));
     convert_config();
 
-    disable_security_checks();
-
     return true;
 }
 
@@ -211,11 +209,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             }
         }
 
-        if(!empty($_POST['restorearea']) && !stristr($data, "<" . $_POST['restorearea'] . ">")) {
-            /* restore a specific area of the configuration */
-            $input_errors[] = gettext("You have selected to restore an area but we could not locate the correct xml tag.");
-        }
-
         if (count($input_errors) == 0) {
             if (!empty($_POST['restorearea'])) {
                 if (!restore_config_section($_POST['restorearea'], $data)) {
@@ -359,11 +352,11 @@ $( document ).ready(function() {
                       <table class="table table-condensed">
                         <tr>
                           <td><?= gettext('Password') ?></td>
-                          <td><input name="encrypt_password" type="password"/></td>
+                          <td><input name="encrypt_password" type="password" autocomplete="new-password"/></td>
                         </tr>
                         <tr>
                           <td><?= gettext('Confirmation') ?></td>
-                          <td><input name="encrypt_passconf" type="password"/> </td>
+                          <td><input name="encrypt_passconf" type="password" autocomplete="new-password"/> </td>
                         </tr>
                       </table>
                     </div>
@@ -408,7 +401,7 @@ $( document ).ready(function() {
                       <table class="table table-condensed">
                         <tr>
                           <td><?= gettext('Password') ?></td>
-                          <td><input name="decrypt_password" type="password"/></td>
+                          <td><input name="decrypt_password" type="password" autocomplete="new-password"/></td>
                         </tr>
                       </table>
                     </div>
@@ -460,7 +453,7 @@ $( document ).ready(function() {
 <?php
                         elseif ($field['type'] == 'password'):?>
 
-                        <input name="<?=$fieldId;?>" type="password" value="<?=$field['value'];?>" />
+                        <input name="<?=$fieldId;?>" type="password" autocomplete="new-password" value="<?=$pconfig[$fieldId];?>" />
 <?php
                         elseif ($field['type'] == 'textarea'):?>
                         <textarea name="<?=$fieldId;?>" rows="10"><?=$pconfig[$fieldId];?></textarea>

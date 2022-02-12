@@ -38,7 +38,6 @@ use OPNsense\Core\Config;
  */
 class Gdrive extends Base implements IBackupProvider
 {
-
     /**
      * get required (user interface) fields for backup connector
      * @return array configuration fields, types and description
@@ -65,11 +64,10 @@ class Gdrive extends Base implements IBackupProvider
             "type" => "file",
             "label" => gettext("P12 key"),
             "help" => sprintf(
-                gettext("You need a private key in p12 format to use Google Drive, " .
-                "instructions on how to aquire one can be found here %s "),
-                "<a href='https://cloud.google.com/storage/docs/authentication#generating-a-private-key'
-                        target='_blank'>
-                    https://cloud.google.com/storage/docs/authentication#generating-a-private-key</a>"
+                gettext('You need a private key in p12 format to use Google Drive, ' .
+                'instructions on how to acquire one can be found %shere%s.'),
+                '<a href="https://docs.opnsense.org/manual/how-tos/cloud_backup.html" target="_blank">',
+                '</a>'
             ),
             "value" => null
         );

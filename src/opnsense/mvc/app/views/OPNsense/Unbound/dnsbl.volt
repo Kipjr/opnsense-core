@@ -13,7 +13,7 @@
  #    this list of conditions and the following disclaimer in the documentation
  #    and/or other materials provided with the distribution.
  #
- # THIS SOFTWARE IS PROVIDED “AS IS” AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ # THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
  # INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
  # AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
  # AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
@@ -27,7 +27,7 @@
 
 <script>
    $(document).ready(function() {
-       var data_get_map = {'frm_dnsbl_settings':"/api/unbound/dnsbl/get"};
+       var data_get_map = {'frm_dnsbl_settings':"/api/unbound/settings/get"};
        mapDataToFormUI(data_get_map).done(function(data){
            formatTokenizersUI();
            $('.selectpicker').selectpicker('refresh');
@@ -36,12 +36,14 @@
        $("#saveAct").SimpleActionButton({
           onPreAction: function() {
               const dfObj = new $.Deferred();
-              saveFormToEndpoint("/api/unbound/dnsbl/set", 'frm_dnsbl_settings', function(){
+              saveFormToEndpoint("/api/unbound/settings/set", 'frm_dnsbl_settings', function(){
                   dfObj.resolve();
               });
               return dfObj;
           }
       });
+
+      updateServiceControlUI('unbound');
    });
 </script>
 
@@ -51,7 +53,7 @@
         <hr />
         <button class="btn btn-primary" id="saveAct"
                 data-endpoint='/api/unbound/service/dnsbl'
-                data-label="{{ lang._('Save') }}"
+                data-label="{{ lang._('Apply') }}"
                 data-error-title="{{ lang._('Error reloading unbound') }}"
                 type="button">
         </button>

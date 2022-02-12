@@ -53,38 +53,8 @@ arp_flush() {
 		sh >/dev/null 2>&1
 }
 
-delete_old_states() {
-	$LOGGER "Starting delete_old_states()"
-	_FLUSHED=0
-	# If the IP changed, remove states from the old one
-	if [ -f /var/db/${interface}_ip ]; then
-		OLD_IP=`cat /var/db/${interface}_ip`
-		$LOGGER "Comparing IPs: Old: ${OLD_IP} New: ${new_ip_address}"
-		if [ -n "${OLD_IP}" ] && [ "${OLD_IP}" != "${new_ip_address}" ]; then
-			$LOGGER "Removing states from old IP '${OLD_IP}' (new IP '${new_ip_address}')"
-			pfctl -i $interface -Fs
-			pfctl -K ${OLD_IP}/32
-			_FLUSHED=1
-		fi
-	fi
-	# Delete states through old gateway if it's not the same
-	OLD_ROUTER=""
-	if [ -n "${old_routers}" ]; then
-		OLD_ROUTER=$old_routers
-	elif [ -f /tmp/${interface}_router ]; then
-		OLD_ROUTER=`cat /tmp/${interface}_router`
-	fi
-	if [ ${_FLUSHED} -eq 0 -a -n "${OLD_ROUTER}" ]; then
-		$LOGGER "Comparing Routers: Old: ${OLD_ROUTER} New: ${new_routers}"
-		if [ "${OLD_ROUTER}" != "${new_routers}" ]; then
-			$LOGGER "Removing states through old gateway '${OLD_ROUTER}' (new gateway '${new_routers}')"
-			pfctl -i $interface -Fs
-		fi
-	fi
-}
 
 delete_old_address() {
-	rm -f /var/db/${interface}_ip
 	eval "$IFCONFIG $interface inet -alias $old_ip_address $medium"
 }
 
@@ -100,12 +70,9 @@ add_new_address() {
 	$LOGGER "New Broadcast Address ($interface): $new_broadcast_address"
 	$LOGGER "New Routers ($interface): $new_routers"
 
-	# This is necessary otherwise dpinger will try to ping all 1s address
-        # XXX still true?!
 	if [ -n "$new_routers" ] && [ "$new_routers" != "255.255.255.255" ]; then
 		echo $new_routers > /tmp/${interface}_router
 	fi
-	echo $new_ip_address > /var/db/${interface}_ip
 }
 
 delete_old_alias() {
@@ -248,26 +215,33 @@ add_new_routes() {
 add_new_resolv_conf() {
 	$LOGGER "Creating resolv.conf"
 
-	if [ -f "/var/etc/nameserver_$interface" ]; then
+	if [ -f "/tmp/${interface}_nameserver" ]; then
 		# Remove old entries
-		for nameserver in `cat /var/etc/nameserver_$interface`; do
+		for nameserver in $(cat /tmp/${interface}_nameserver); do
 			route delete $nameserver >/dev/null 2>&1
 		done
 	fi
 
+	rm -f /tmp/${interface}_nameserver
+	rm -f /tmp/${interface}_searchdomain
+
+	if [ "$(pluginctl -g system.dnsallowoverride)" != "1" ]; then
+	        # prevent installing DNS information when not allowed
+		return 0
+	fi
+
 	if [ -n "$new_domain_name_servers" ]; then
-		rm -f /var/etc/nameserver_$interface
-		ALLOWOVERRIDE=$(grep -c dnsallowoverride /conf/config.xml)
 		for nameserver in $new_domain_name_servers; do
 			# Add a route to the nameserver out the correct interface
 			# so that mulitple wans work correctly with multiple dns
 			# also backup the nameserver for later route removal
-			if [ $ALLOWOVERRIDE -gt 0 ]; then
-				echo $nameserver >>/var/etc/nameserver_$interface
-				route add $nameserver -iface $interface
-			fi
+			echo $nameserver >> /tmp/${interface}_nameserver
+			route add $nameserver -iface $interface
 		done
-		echo $new_domain_name >/var/etc/searchdomain_$interface
+	fi
+
+	if [ -n "$new_domain_name" ]; then
+		echo $new_domain_name > /tmp/${interface}_searchdomain
 	fi
 
 	return 0
@@ -335,7 +309,6 @@ MEDIUM)
 PREINIT)
 	delete_old_alias
 	$IFCONFIG $interface inet alias 0.0.0.0 netmask 255.0.0.0 broadcast 255.255.255.255 up
-	delete_old_states
 	rm -f /tmp/${interface}_router
 	;;
 
@@ -345,9 +318,6 @@ ARPCHECK|ARPSEND)
 BOUND|RENEW|REBIND|REBOOT)
 	check_hostname
 	changes="no"
-	if [ "$old_ip_address" != "$new_ip_address" ]; then
-		delete_old_states
-	fi
 	if [ -n "$old_ip_address" ]; then
 		if [ -n "$alias_ip_address" -a "$old_ip_address" != "$alias_ip_address" ]; then
 			delete_old_alias
@@ -381,7 +351,6 @@ BOUND|RENEW|REBIND|REBOOT)
 
 EXPIRE|FAIL)
 	delete_old_alias
-	delete_old_states
 	if [ -n "$old_ip_address" ]; then
 		delete_old_address
 		delete_old_routes
@@ -429,7 +398,6 @@ TIMEOUT)
 		fi
 	fi
 	eval "$IFCONFIG $interface inet -alias $new_ip_address $medium"
-	delete_old_states
 	delete_old_routes
 	exit_with_hooks 1
 	;;

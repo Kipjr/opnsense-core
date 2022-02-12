@@ -36,7 +36,7 @@ License
 
 OPNsense is and will always be available under the 2-Clause BSD license:
 
-http://opensource.org/licenses/BSD-2-Clause
+https://opensource.org/licenses/BSD-2-Clause
 
 Every contribution made to the project must be licensed under the
 same conditions in order to keep OPNsense truly free and accessible
@@ -60,7 +60,7 @@ Several OPTIONS exist to customise the package, e.g.:
 
 * CORE_DEPENDS: a list of required dependencies for the package
 * CORE_DEPENDS_ARCH: a list of special <ARCH>-required packages
-* CORE_ORIGIN: sets a HardenedBSD compatible package/ports origin
+* CORE_ORIGIN: sets a FreeBSD compatible package/ports origin
 * CORE_FLAVOUR: can be set to "OpenSSL" or "LibreSSL"
 * CORE_COMMENT: a short description of the package
 * CORE_MAINTAINER: email of the package maintainer

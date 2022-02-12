@@ -29,27 +29,6 @@
 
 require_once("guiconfig.inc");
 
-function lagg_inuse($lagg_intf)
-{
-    global $config;
-
-    foreach (array_keys(legacy_config_get_interfaces(['virtual' => false])) as $if) {
-        if ($config['interfaces'][$if]['if'] == $lagg_intf) {
-            return true;
-        }
-    }
-
-    if (isset($config['vlans']['vlan'])) {
-        foreach ($config['vlans']['vlan'] as $vlan) {
-            if($vlan['if'] == $lagg_intf) {
-                return true;
-            }
-        }
-    }
-
-    return false;
-}
-
 $a_laggs = &config_read_array('laggs', 'lagg');
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -59,7 +38,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (!empty($_POST['action']) && $_POST['action'] == "del" && isset($id)) {
-        if (lagg_inuse($a_laggs[$id]['laggif'])) {
+        if (is_interface_assigned($a_laggs[$id]['laggif'])) {
             $input_errors[] = gettext("This LAGG interface cannot be deleted because it is still being used.");
         } else {
             mwexecf('/sbin/ifconfig %s destroy', $a_laggs[$id]['laggif']);
@@ -71,15 +50,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-
 include("head.inc");
+
 legacy_html_escape_form_data($a_laggs);
-$main_buttons = array(
-  array('href'=>'interfaces_lagg_edit.php', 'label'=>gettext('Add')),
-);
 
 ?>
-
 <body>
   <script>
   $( document ).ready(function() {
@@ -127,7 +102,11 @@ $main_buttons = array(
                         <th><?=gettext("Members");?></th>
                         <th><?=gettext("Protocol");?></th>
                         <th><?=gettext("Description");?></th>
-                        <th class="text-nowrap"></th>
+                        <th class="text-nowrap">
+                           <a href="interfaces_lagg_edit.php" class="btn btn-primary btn-xs" data-toggle="tooltip" title="<?= html_safe(gettext('Add')) ?>">
+                            <i class="fa fa-plus fa-fw"></i>
+                          </a>
+                        </th>
                       </tr>
                     </thead>
                     <tbody>
@@ -151,11 +130,6 @@ $main_buttons = array(
 <?php
                     $i++;
                     endforeach; ?>
-                      <tr>
-                        <td colspan="5">
-                           <?=gettext("LAGG allows for link aggregation, bonding and fault tolerance. Only unassigned interfaces can be added to LAGG."); ?>
-                        </td>
-                      </tr>
                     </tbody>
                   </table>
                 </div>

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (C) 2016-2019 Franco Fichtner <franco@opnsense.org>
+# Copyright (C) 2016-2021 Franco Fichtner <franco@opnsense.org>
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -29,25 +29,74 @@ LOCKFILE="/tmp/pkg_upgrade.progress"
 FLOCK="/usr/local/bin/flock -n -o"
 COMMANDS="
 check
+connection
 health
 install
 lock
 reinstall
 remove
+resync
 security
 sync
-type
 unlock
+update
 upgrade
 "
 
-SELECTED=${1}
-ARGUMENT=${2}
+DO_RANDOM=
+DO_SCRIPT=
 
-for COMMAND in ${COMMANDS}; do
-	if [ "${SELECTED}" != ${COMMAND} ]; then
-		continue
+while getopts r:s: OPT; do
+	case ${OPT} in
+	r)
+		DO_RANDOM="-r $(jot -r 1 1 ${OPTARG})"
+		;;
+	s)
+		DO_SCRIPT="-s ${OPTARG}"
+		;;
+	*)
+		# ignore unknown
+		;;
+	esac
+done
+
+shift $((${OPTIND} - 1))
+
+if [ -n "${DO_SCRIPT}" ]; then
+	COMMAND=${DO_SCRIPT#"-s "}
+else
+	FOUND=
+
+	for COMMAND in ${COMMANDS}; do
+		if [ "${1}" != ${COMMAND} ]; then
+			continue
+		fi
+
+		FOUND=1
+	done
+
+	if [ -n "${FOUND}" ]; then
+		COMMAND=${BASEDIR}/${1}.sh
+	else
+		COMMAND=
 	fi
 
-	${FLOCK} ${LOCKFILE} ${BASEDIR}/${COMMAND}.sh ${ARGUMENT}
-done
+	shift
+fi
+
+# make sure the script exists
+if [ ! -f "${COMMAND}" ]; then
+	exit 0
+fi
+
+if [ -n "${DO_RANDOM}" ]; then
+	sleep ${DO_RANDOM#"-r "}
+fi
+
+${FLOCK} ${LOCKFILE} ${COMMAND} "${@}"
+RET=${?}
+
+# backend expects us to avoid returning errors
+if [ -n "${DO_SCRIPT}" ]; then
+	exit ${RET}
+fi

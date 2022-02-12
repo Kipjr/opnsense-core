@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2014-2020 Franco Fichtner <franco@opnsense.org>
+ * Copyright (C) 2014-2022 Franco Fichtner <franco@opnsense.org>
  * Copyright (C) 2010 Ermal Luçi
  * Copyright (C) 2005-2006 Colin Smith <ethethlay@gmail.com>
  * Copyright (C) 2004-2007 Scott Ullrich <sullrich@gmail.com>
@@ -32,13 +32,21 @@
 
 require_once("IPv6.inc");
 
-function killbyname($procname, $sig = 'TERM')
+function killbyname($procname, $sig = 'TERM', $waitforit = false)
 {
     if (!is_process_running($procname)) {
         return;
     }
 
     mwexecf('/bin/pkill -%s %s', array($sig, $procname));
+
+    if (!$waitforit) {
+        return;
+    }
+
+    while (is_process_running($procname)) {
+        usleep(200 * 1000);
+    }
 }
 
 function killbypid($pidfile, $sig = 'TERM', $waitforit = false)
@@ -470,119 +478,59 @@ function ip2ulong($ip)
     return sprintf("%u", ip2long32($ip));
 }
 
-/* Find out how many IPs are contained within a given IP range
- *  e.g. 192.168.0.0 to 192.168.0.255 returns 256
- */
-function ip_range_size($startip, $endip)
+/* Find the smallest possible subnet mask for given IP range */
+function find_smallest_cidr($ips, $family = 'inet')
 {
-    if (is_ipaddr($startip) && is_ipaddr($endip)) {
-        // Operate as unsigned long because otherwise it wouldn't work
-        //   when crossing over from 127.255.255.255 / 128.0.0.0 barrier
-        return abs(ip2ulong($startip) - ip2ulong($endip)) + 1;
-    }
-    return -1;
+    return $family == 'inet6' ?
+        find_smallest_cidr6($ips) :
+        find_smallest_cidr4($ips);
 }
 
-/* Find the smallest possible subnet mask which can contain a given number of IPs
- *  e.g. 512 IPs can fit in a /23, but 513 IPs need a /22
- */
-function find_smallest_cidr($number)
+/* Find the smallest possible subnet mask for given IPv4 range */
+function find_smallest_cidr4($ips)
 {
-    $smallest = 1;
-    for ($b = 32; $b > 0; $b--) {
-        $smallest = ($number <= pow(2, $b)) ? $b : $smallest;
-    }
-    return (32 - $smallest);
-}
-
-/* Return the previous IP address before the given address */
-function ip_before($ip)
-{
-    return long2ip32(ip2long($ip) - 1);
-}
-
-/* Return the next IP address after the given address */
-function ip_after($ip)
-{
-    return long2ip32(ip2long($ip) + 1);
-}
-
-/* Return true if the first IP is 'before' the second */
-function ip_less_than($ip1, $ip2)
-{
-    // Compare as unsigned long because otherwise it wouldn't work when
-    //   crossing over from 127.255.255.255 / 128.0.0.0 barrier
-    return ip2ulong($ip1) < ip2ulong($ip2);
-}
-
-/* Return true if the first IP is 'after' the second */
-function ip_greater_than($ip1, $ip2)
-{
-    // Compare as unsigned long because otherwise it wouldn't work
-    //   when crossing over from 127.255.255.255 / 128.0.0.0 barrier
-    return ip2ulong($ip1) > ip2ulong($ip2);
-}
-
-/* Convert a range of IPs to an array of subnets which can contain the range. */
-function ip_range_to_subnet_array($startip, $endip)
-{
-    if (!is_ipaddr($startip) || !is_ipaddr($endip)) {
-        return array();
+    foreach ($ips as $id => $ip) {
+        $ips[$id] = ip2long($ip);
     }
 
-    // Container for subnets within this range.
-    $rangesubnets = array();
-
-    // Figure out what the smallest subnet is that holds the number of IPs in the given range.
-    $cidr = find_smallest_cidr(ip_range_size($startip, $endip));
-
-    // Loop here to reduce subnet size and retest as needed. We need to make sure
-    //   that the target subnet is wholly contained between $startip and $endip.
-    for (; $cidr <= 32; $cidr++) {
-        // Find the network and broadcast addresses for the subnet being tested.
-        $targetsub_min = gen_subnet($startip, $cidr);
-        $targetsub_max = gen_subnet_max($startip, $cidr);
-
-        // Check best case where the range is exactly one subnet.
-        if (($targetsub_min == $startip) && ($targetsub_max == $endip)) {
-            // Hooray, the range is exactly this subnet!
-            return array("{$startip}/{$cidr}");
+    for ($bits = 0; $bits <= 32; $bits += 1) {
+        $mask = (0xffffffff << $bits) & 0xffffffff;
+        $test = [];
+        foreach ($ips as $ip) {
+            $test[$ip & $mask] = true;
         }
-
-        // These remaining scenarios will find a subnet that uses the largest
-        //  chunk possible of the range being tested, and leave the rest to be
-        //  tested recursively after the loop.
-
-        // Check if the subnet begins with $startip and ends before $endip
-        if (($targetsub_min == $startip) && ip_less_than($targetsub_max, $endip)) {
-            break;
-        }
-
-        // Check if the subnet ends at $endip and starts after $startip
-        if (ip_greater_than($targetsub_min, $startip) && ($targetsub_max == $endip)) {
-            break;
-        }
-
-        // Check if the subnet is between $startip and $endip
-        if (ip_greater_than($targetsub_min, $startip) && ip_less_than($targetsub_max, $endip)) {
+        if (count($test) == 1) {
+            /* one element means CIDR size matches all */
             break;
         }
     }
 
-    // Some logic that will recursivly search from $startip to the first IP before the start of the subnet we just found.
-    // NOTE: This may never be hit, the way the above algo turned out, but is left for completeness.
-    if ($startip != $targetsub_min) {
-        $rangesubnets = array_merge($rangesubnets, ip_range_to_subnet_array($startip, ip_before($targetsub_min)));
+    return 32 - $bits;
+}
+
+/* Find the smallest possible subnet mask for given IPv6 range */
+function find_smallest_cidr6($ips)
+{
+    foreach ($ips as $id => $ip) {
+        $ips[$id] = unpack('N*', inet_pton($ip));
     }
 
-    // Add in the subnet we found before, to preserve ordering
-    $rangesubnets[] = "{$targetsub_min}/{$cidr}";
-
-    // And some more logic that will search after the subnet we found to fill in to the end of the range.
-    if ($endip != $targetsub_max) {
-        $rangesubnets = array_merge($rangesubnets, ip_range_to_subnet_array(ip_after($targetsub_max), $endip));
+    for ($bits = 0; $bits <= 128; $bits += 1) {
+        $mask1 = (0xffffffff << max($bits - 96, 0)) & 0xffffffff;
+        $mask2 = (0xffffffff << max($bits - 64, 0)) & 0xffffffff;
+        $mask3 = (0xffffffff << max($bits - 32, 0)) & 0xffffffff;
+        $mask4 = (0xffffffff << $bits) & 0xffffffff;
+        $test = [];
+        foreach ($ips as $ip) {
+            $test[sprintf('%032b%032b%032b%032b', $ip[1] & $mask1, $ip[2] & $mask2, $ip[3] & $mask3, $ip[4] & $mask4)] = true;
+        }
+        if (count($test) == 1) {
+            /* one element means CIDR size matches all */
+            break;
+        }
     }
-    return $rangesubnets;
+
+    return 128 - $bits;
 }
 
 /* returns true if $ipaddr is a valid dotted IPv4 address or an IPv6 */
@@ -633,20 +581,10 @@ function is_ipaddrv4($ipaddr)
     }
 }
 
-/* returns true if $ipaddr is a valid linklocal address */
+/* returns true if $ipaddr is a valid linklocal address (inside fe80::/10) */
 function is_linklocal($ipaddr)
 {
-    return (strtolower(substr($ipaddr, 0, 5)) == "fe80:");
-}
-
-/* returns scope of a linklocal address */
-function get_ll_scope($addr)
-{
-    if (!is_linklocal($addr) || !strstr($addr, "%")) {
-        return '';
-    }
-    list ($ll, $scope) = explode("%", $addr);
-    return $scope;
+    return preg_match("/^fe[89ab][0-9a-f]:/i", $ipaddr);
 }
 
 /* returns true if $ipaddr is a valid literal IPv6 address */
@@ -761,29 +699,6 @@ function is_macaddr($macaddr, $partial = false)
     return preg_match('/^[0-9A-F]{2}(?:[:][0-9A-F]{2}){' . $repeat . '}$/i', $macaddr) == 1 ? true : false;
 }
 
-/* returns true if $name is a valid name for an alias
-   returns NULL if a reserved word is used
-   returns FALSE for bad chars in the name - this allows calling code to determine what the problem was.
-   aliases cannot be:
-  bad chars: anything except a-z 0-9 and underscore
-  bad names: empty string, pure numeric, pure underscore
-  reserved words: pre-defined service/protocol/port names which should not be ambiguous and pf keywords */
-
-function is_validaliasname($name)
-{
-    $reserved = array('all', 'pass', 'block', 'out', 'queue', 'max', 'min', 'pptp', 'pppoe', 'L2TP', 'OpenVPN', 'IPsec');
-
-    if (!is_string($name) || strlen($name) >= 32 || preg_match('/(^_*$|^\d*$|[^a-z0-9_])/i', $name)) {
-        return false;
-    }
-
-    if (in_array($name, $reserved, true) || getservbyname($name, 'tcp') || getservbyname($name, 'udp') || getprotobyname($name)) {
-        return null;
-    }
-
-    return true;
-}
-
 /* returns true if $port is a valid TCP/UDP port */
 function is_port($port)
 {
@@ -846,55 +761,26 @@ function is_inrange($test, $start, $end)
     return is_ipaddrv6($test) ? is_inrange_v6($test, $start, $end) : is_inrange_v4($test, $start, $end);
 }
 
-/* XXX: return the configured carp interface list */
-function get_configured_carp_interface_list($carpinterface = '', $family = 'inet')
+function get_configured_carp_interface_list()
 {
-    $iflist = array();
+    $carp_list = [];
 
     foreach (config_read_array('virtualip', 'vip') as $vip) {
-        switch ($vip['mode']) {
-            case 'carp':
-                if (!empty($carpinterface)) {
-                    if ($carpinterface == "{$vip['interface']}_vip{$vip['vhid']}") {
-                        if ($family == 'inet' && is_ipaddrv4($vip['subnet'])) {
-                            return $vip['subnet'];
-                        } elseif ($family == 'inet6' && is_ipaddrv6($vip['subnet'])) {
-                            return $vip['subnet'];
-                        }
-                    }
-                } else {
-                    $iflist["{$vip['interface']}_vip{$vip['vhid']}"] = $vip['subnet'];
-                }
-                break;
+        if ($vip['mode'] == 'carp') {
+            $carp_list["{$vip['interface']}_vip{$vip['vhid']}"] = $vip['subnet'];
         }
     }
 
-    return $iflist;
+    return $carp_list;
 }
 
 function get_configured_ip_aliases_list()
 {
-    $alias_list = array();
+    $alias_list = [];
 
     foreach (config_read_array('virtualip', 'vip') as $vip) {
         if ($vip['mode'] == 'ipalias') {
             $alias_list[$vip['subnet']] = $vip['interface'];
-        }
-    }
-
-    return $alias_list;
-}
-
-/* return all configured aliases list (IP, carp, proxyarp and other) */
-function get_configured_vips_list()
-{
-    $alias_list = array();
-
-    foreach (config_read_array('virtualip', 'vip') as $vip) {
-        if ($vip['mode'] == 'carp') {
-            $alias_list[] = array('ipaddr' => $vip['subnet'], 'if' => "{$vip['interface']}_vip{$vip['vhid']}");
-        } else {
-            $alias_list[] = array('ipaddr' => $vip['subnet'], 'if' => $vip['interface']);
         }
     }
 
@@ -928,7 +814,8 @@ function get_configured_ip_addresses()
             if (!empty($if[$iptype])) {
                 foreach ($if[$iptype] as $addr) {
                     if (!empty($addr['ipaddr'])) {
-                        $ip_array[$addr['ipaddr']] = $ifname;
+                        $scope = $addr['link-local'] ? "%{$ifname}" : '';
+                        $ip_array[$addr['ipaddr'] . $scope] = $ifname;
                     }
                 }
             }
@@ -950,15 +837,17 @@ function get_configured_ip_addresses()
  */
 function get_interface_list($only_active = false, $include_dmesg = false)
 {
-    $dmesg_arr = array();
-    $iflist = array();
+    $dmesg_arr = [];
+    $iflist = [];
 
     if ($include_dmesg) {
         exec('/sbin/dmesg', $dmesg_arr);
     }
 
     /* list of virtual interface types */
-    $vfaces = array(
+    $vfaces = [
+      '_stf',
+      '_vip',
       '_vlan',
       '_wlan',
       'bridge',
@@ -972,24 +861,26 @@ function get_interface_list($only_active = false, $include_dmesg = false)
       'lagg',
       'lo',
       'ng',
+      'ovpnc',
+      'ovpns',
       'pflog',
+      'pfsync',
       'plip',
       'ppp',
       'pppoe',
       'pptp',
-      'pfsync',
       'sl',
+      'tap',
       'tun',
-      'vip'
-    );
+    ];
 
     $ifnames_up = legacy_interface_listget('up');
     $ifnames = legacy_interface_listget();
-    $all_interfaces = legacy_config_get_interfaces(array('virtual' => false));
+    $all_interfaces = legacy_config_get_interfaces(['virtual' => false]);
     $all_interface_data = legacy_interfaces_details();
 
     if ($only_active) {
-        $_ifnames = array();
+        $_ifnames = [];
         $all_stats = legacy_interface_stats();
         foreach ($ifnames as $ifname) {
             $ifinfo = $all_stats[$ifname];
@@ -1001,18 +892,18 @@ function get_interface_list($only_active = false, $include_dmesg = false)
     }
 
     foreach ($ifnames as $ifname) {
-        $tmp_ifnames = preg_split('/\d/', $ifname);
-        if (in_array(array_shift($tmp_ifnames), $vfaces)) {
+        $tmp_ifnames = preg_split('/\d+/', $ifname);
+        if (count(array_intersect($tmp_ifnames, $vfaces))) {
             continue;
         }
 
-        $ifdata = !empty($all_interface_data[$ifname]) ? $all_interface_data[$ifname] : array();
-        $toput = array(
+        $ifdata = !empty($all_interface_data[$ifname]) ? $all_interface_data[$ifname] : [];
+        $toput = [
           'up' => in_array($ifname, $ifnames_up),
           'ipaddr' => !empty($ifdata['ipv4'][0]['ipaddr']) ? $ifdata['ipv4'][0]['ipaddr'] : null,
           'mac' => !empty($ifdata['macaddr']) ? $ifdata['macaddr'] : null,
           'dmesg' => '',
-        );
+        ];
 
         foreach ($all_interfaces as $name => $int) {
             if ($int['if'] == $ifname) {
@@ -1022,7 +913,7 @@ function get_interface_list($only_active = false, $include_dmesg = false)
         }
 
         foreach ($dmesg_arr as $dmesg_line) {
-            $dmesg = array();
+            $dmesg = [];
             if (preg_match("/^{$ifname}: <(.*?)>/i", $dmesg_line, $dmesg) == 1) {
                 $toput['dmesg'] = $dmesg[1];
                 break;
@@ -1037,7 +928,7 @@ function get_interface_list($only_active = false, $include_dmesg = false)
 
 /****f* util/log_error
 * NAME
-*   log_error  - Sends a string to syslog.
+*   log_error  - Sends a string to syslog with LOG_ERR severity.
 * INPUTS
 *   $error     - string containing the syslog message.
 * RESULT
@@ -1045,13 +936,27 @@ function get_interface_list($only_active = false, $include_dmesg = false)
 ******/
 function log_error($error)
 {
+    log_msg($error, LOG_ERR);
+}
+
+/****f* util/log_msg
+* NAME
+*   log_msg  - Sends a string to syslog with the required severity level.
+* INPUTS
+*   $msg     - string containing the syslog message.
+*   $prio    - syslog severity level.
+* RESULT
+*   null
+******/
+function log_msg($msg, $prio = LOG_ERR)
+{
     $page = $_SERVER['SCRIPT_NAME'];
     if (empty($page)) {
         $files = get_included_files();
         $page = basename($files[0]);
     }
 
-    syslog(LOG_ERR, "$page: $error");
+    syslog($prio, "$page: $msg");
 }
 
 function url_safe($format, $args = array())
@@ -1148,8 +1053,7 @@ function mwexecf_bg($format, $args = array(), $mute = false)
 /* check if an alias exists */
 function is_alias($name)
 {
-    global $aliastable;
-    return array_key_exists($name, $aliastable);
+    return \OPNsense\Firewall\Util::isAlias($name);
 }
 
 function subnet_size($subnet)
@@ -1190,9 +1094,11 @@ function check_subnets_overlap($subnet1, $bits1, $subnet2, $bits2)
 /* compare two IP addresses */
 function ipcmp($a, $b)
 {
-    if (ip_less_than($a, $b)) {
+    $na = inet_pton($a);
+    $nb = inet_pton($b);
+    if ($na < $nb) {
         return -1;
-    } elseif (ip_greater_than($a, $b)) {
+    } elseif ($na > $nb) {
         return 1;
     } else {
         return 0;
@@ -1226,10 +1132,14 @@ function is_private_ip($iptocheck)
 
 function format_bytes($bytes)
 {
-    if ($bytes >= (1024 * 1024 * 1024)) {
-        return sprintf("%.2f GB", $bytes / (1024 * 1024 * 1024));
-    } elseif ($bytes >= 1024 * 1024) {
-        return sprintf("%.2f MB", $bytes / (1024 * 1024));
+    if ($bytes >= 1024 ** 5) {
+        return sprintf("%.2f PB", $bytes / (1024 ** 5));
+    } elseif ($bytes >= 1024 ** 4) {
+        return sprintf("%.2f TB", $bytes / (1024 ** 4));
+    } elseif ($bytes >= 1024 ** 3) {
+        return sprintf("%.2f GB", $bytes / (1024 ** 3));
+    } elseif ($bytes >= 1024 ** 2) {
+        return sprintf("%.2f MB", $bytes / (1024 ** 2));
     } elseif ($bytes >= 1024) {
         return sprintf("%.0f KB", $bytes / 1024);
     } else {
@@ -1360,36 +1270,14 @@ function is_URL($url)
     return false;
 }
 
-function get_staticroutes($returnsubnetsonly = false, $returnhostnames = false)
+function get_staticroutes($returnsubnetsonly = false)
 {
     global $aliastable;
 
-    $allstaticroutes = array();
-    $allsubnets = array();
-
-    /* Loop through routes and expand aliases as we find them. */
+    $allstaticroutes = [];
+    $allsubnets = [];
     foreach (config_read_array('staticroutes', 'route') as $route) {
-        if (is_alias($route['network'])) {
-            if (!isset($aliastable[$route['network']])) {
-                continue;
-            }
-            $subnets = preg_split('/\s+/', $aliastable[$route['network']]);
-            foreach ($subnets as $net) {
-                if (!is_subnet($net)) {
-                    if (is_ipaddrv4($net)) {
-                        $net .= "/32";
-                    } elseif (is_ipaddrv6($net)) {
-                        $net .= "/128";
-                    } elseif ($returnhostnames === false || !is_fqdn($net)) {
-                        continue;
-                    }
-                }
-                $temproute = $route;
-                $temproute['network'] = $net;
-                $allstaticroutes[] = $temproute;
-                $allsubnets[] = $net;
-            }
-        } elseif (is_subnet($route['network'])) {
+        if (is_subnet($route['network'])) {
             $allstaticroutes[] = $route;
             $allsubnets[] = $route['network'];
         }
@@ -1497,40 +1385,26 @@ function dhcp6c_duid_clear()
     @unlink('/conf/dhcp6c_duid');
 }
 
-function get_dyndns_ip($int, $ipver = 4)
+/**
+ * check if interface is assigned
+ * @param $interface technical interface name
+ * @return string interface name (lan, wan, optX)
+ */
+function is_interface_assigned($interface)
 {
-    $ip_address = $ipver == 6 ? get_interface_ipv6($int) : get_interface_ip($int);
-    if (empty($ip_address)) {
-        log_error("Aborted IPv{$ipver} detection: no address for {$int}");
-        return 'down';
-    }
+    global $config;
 
-    if ($ipver != 6 && is_private_ip($ip_address)) {
-        /* Chinese alternative is http://ip.3322.net/ */
-        $hosttocheck = 'http://checkip.dyndns.org';
-        $ip_ch = curl_init($hosttocheck);
-        curl_setopt($ip_ch, CURLOPT_RETURNTRANSFER, 1);
-        curl_setopt($ip_ch, CURLOPT_INTERFACE, $ip_address);
-        curl_setopt($ip_ch, CURLOPT_CONNECTTIMEOUT, 5);
-        curl_setopt($ip_ch, CURLOPT_TIMEOUT, 30);
-        curl_setopt($ip_ch, CURLOPT_IPRESOLVE, CURL_IPRESOLVE_V4);
-        $ip_result = curl_exec($ip_ch);
-        if ($ip_result !== false) {
-            preg_match('=<body>Current IP Address: (.*)</body>=siU', $ip_result, $matches);
-            $ip_address = trim($matches[1]);
-        } else {
-            log_error('Aborted IPv4 detection: ' . curl_error($ip_ch));
-            $ip_address = '';
+    foreach (legacy_config_get_interfaces() as $if => $intf) {
+        if (isset($intf['if']) && $intf['if'] == $interface) {
+            return true;
         }
-        curl_close($ip_ch);
-    } elseif ($ipver == 6 && is_linklocal($ip_address)) {
-        log_error('Aborted IPv6 detection: cannot bind to link-local address');
-        $ip_address = '';
     }
-
-    if (($ipver == 6 && !is_ipaddrv6($ip_address)) || ($ipver != 6 && !is_ipaddrv4($ip_address))) {
-        return 'down';
+    if (isset($config['vlans']['vlan'])) {
+        foreach ($config['vlans']['vlan'] as $vlan) {
+            if ($vlan['if'] == $interface) {
+                return true;
+            }
+        }
     }
-
-    return $ip_address;
+    return false;
 }

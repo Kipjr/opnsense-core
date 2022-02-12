@@ -61,28 +61,89 @@ function set_language()
     bind_textdomain_codeset($textdomain, $lang_encoding);
 }
 
-function session_auth(&$Login_Error)
+/* DNS ReBinding attack prevention, return true when rebind detected*/
+function check_security_dns_rebind()
+{
+    global $config;
+    if (!isset($config['system']['webgui']['nodnsrebindcheck'])) {
+        /* either an IPv6 address with or without an alternate port */
+        if (strstr($_SERVER['HTTP_HOST'], "]")) {
+            $http_host_port = explode("]", $_SERVER['HTTP_HOST']);
+            /* v6 address has more parts, drop the last part */
+            if (count($http_host_port) > 1) {
+                array_pop($http_host_port);
+                $http_host = str_replace(["[", "]"], "", implode(":", $http_host_port));
+            } else {
+                $http_host = str_replace(["[", "]"], "", implode(":", $http_host_port));
+            }
+        } else {
+            $http_host = explode(":", $_SERVER['HTTP_HOST']);
+            $http_host = $http_host[0];
+        }
+        $this_host = [
+            $config['system']['hostname'] . "." . $config['system']['domain'],
+            $config['system']['hostname'],
+            "localhost"
+        ];
+        if (!empty($config['system']['webgui']['althostnames'])) {
+            $this_host = array_merge($this_host, explode(" ", $config['system']['webgui']['althostnames']));
+        }
+        if (is_ipaddr($http_host) || in_array($_SERVER['SERVER_ADDR'], ["127.0.0.1", "::1"])) {
+            return false;
+        } elseif (in_array(strtolower($http_host), array_map('strtolower', $this_host))) {
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
+/* HTTP referer detection, return true when being forwarded from an unknown referer*/
+function check_security_http_referer_enforement()
+{
+    global $config;
+    if (!isset($config['system']['webgui']['nohttpreferercheck']) && isset($_SERVER['HTTP_REFERER'])) {
+        $referrer_host = str_replace(["[", "]"], "", parse_url($_SERVER['HTTP_REFERER'], PHP_URL_HOST));
+        $this_host = [$config['system']['hostname'] . "." . $config['system']['domain'], $config['system']['hostname']];
+        if (!empty($config['system']['webgui']['althostnames'])) {
+            $this_host = array_merge($this_host, explode(" ", $config['system']['webgui']['althostnames']));
+        }
+        if ($referrer_host) {
+            if (in_array(strtolower($referrer_host), array_map('strtolower', $this_host))) {
+                return false;
+            } elseif (isAuthLocalIP($referrer_host)) {
+                return false;
+            } elseif ($referrer_host == "127.0.0.1" || $referrer_host == "localhost") {
+                // allow SSH port forwarded connections and links from localhost
+                return false;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
+function session_auth()
 {
     global $config;
 
-    function auth_log($message)
+    function auth_log($message, $prio = LOG_ERR)
     {
-        openlog("webgui", LOG_ODELAY, LOG_AUTH);
-        log_error($message);
+        openlog("audit", LOG_ODELAY, LOG_AUTH);
+        log_msg($message, $prio);
         closelog();
     }
 
-    // Handle HTTPS httponly and secure flags
-    $currentCookieParams = session_get_cookie_params();
-    session_set_cookie_params(
-        $currentCookieParams["lifetime"],
-        $currentCookieParams["path"],
-        null,
-        ($config['system']['webgui']['protocol'] == "https"),
-        true
-    );
-
     if (session_status() == PHP_SESSION_NONE) {
+        // Handle HTTPS httponly and secure flags
+        $currentCookieParams = session_get_cookie_params();
+        session_set_cookie_params(
+            $currentCookieParams["lifetime"],
+            $currentCookieParams["path"],
+            null,
+            ($config['system']['webgui']['protocol'] == "https"),
+            true
+        );
         session_start();
     }
 
@@ -91,34 +152,37 @@ function session_auth(&$Login_Error)
         session_write_close();
         return false;
     }
+    // check additional security measures
+    if (empty($_SESSION['Username'])) {
+        if (check_security_dns_rebind()) {
+            display_error_form(sprintf(gettext('A potential %sDNS Rebind attack%s has been detected.%sTry to access the router by IP address instead of by hostname. You can disable this check if needed under System: Settings: Administration.'), '<a href="http://en.wikipedia.org/wiki/DNS_rebinding">', '</a>', '<br />'));
+            exit;
+        } elseif (check_security_http_referer_enforement()) {
+            display_error_form(sprintf(
+                gettext('The HTTP_REFERER "%s" does not match the predefined settings. You can disable this check if needed under System: Settings: Administration.'),
+                html_safe($_SERVER['HTTP_REFERER'])
+            ));
+            exit;
+        }
+    }
 
     /* Validate incoming login request */
     if (isset($_POST['login']) && !empty($_POST['usernamefld']) && !empty($_POST['passwordfld'])) {
-        // authenticate using config settings, or local if failed
-        $authservers = !empty($config['system']['webgui']['authmode']) ?
-            explode(',', $config['system']['webgui']['authmode']) : array('Local Database');
-        $is_authenticated = false;
-        $authenticator = null;
-
-        foreach ($authservers as $authserver) {
-            $authenticator = get_authenticator(auth_get_authserver($authserver));
-            if ($authenticator != null && $authenticator->authenticate($_POST['usernamefld'], $_POST['passwordfld'])) {
-                $is_authenticated = true;
-                break;
-            }
-        }
+        $authFactory = new \OPNsense\Auth\AuthenticationFactory();
+        $is_authenticated = $authFactory->authenticate("WebGui", $_POST['usernamefld'], $_POST['passwordfld']);
 
         if ($is_authenticated) {
+            $authenticator = $authFactory->lastUsedAuth;
             // Generate a new id to avoid session fixation
             session_regenerate_id();
-            $_SESSION['Username'] = $_POST['usernamefld'];
+            $_SESSION['Username'] = $authenticator->getUserName($_POST['usernamefld']);
             $_SESSION['last_access'] = time();
             $_SESSION['protocol'] = $config['system']['webgui']['protocol'];
             if ($authenticator != null && $authenticator->shouldChangePassword($_SESSION['Username'], $_POST['passwordfld'])) {
                 $_SESSION['user_shouldChangePassword'] = true;
             }
             if (!isset($config['system']['webgui']['quietlogin'])) {
-                auth_log(sprintf("Successful login for user '%s' from: %s", $_POST['usernamefld'], $_SERVER['REMOTE_ADDR']));
+                auth_log(sprintf("Successful login for user '%s' from: %s", $_POST['usernamefld'], $_SERVER['REMOTE_ADDR']), LOG_NOTICE);
             }
             if (!empty($_GET['url'])) {
                 $tmp_url_parts = parse_url($_GET['url']);
@@ -145,7 +209,6 @@ function session_auth(&$Login_Error)
             exit;
         } else {
             auth_log("Web GUI authentication error for '{$_POST['usernamefld']}' from {$_SERVER['REMOTE_ADDR']}");
-            $Login_Error = true;
         }
     }
 
@@ -176,9 +239,9 @@ function session_auth(&$Login_Error)
     /* user hit the logout button */
     if (isset($_GET['logout'])) {
         if (isset($_SESSION['Logout'])) {
-            auth_log(sprintf("Session timed out for user '%s' from: %s", $_SESSION['Username'], $_SERVER['REMOTE_ADDR']));
+            auth_log(sprintf("Session timed out for user '%s' from: %s", $_SESSION['Username'], $_SERVER['REMOTE_ADDR']), LOG_NOTICE);
         } else {
-            auth_log(sprintf("User logged out for user '%s' from: %s", $_SESSION['Username'], $_SERVER['REMOTE_ADDR']));
+            auth_log(sprintf("User logged out for user '%s' from: %s", $_SESSION['Username'], $_SERVER['REMOTE_ADDR']), LOG_NOTICE);
         }
 
         /* wipe out $_SESSION */
@@ -200,13 +263,10 @@ function session_auth(&$Login_Error)
     return true;
 }
 
-/* XXX spagehtti code :( */
-$Login_Error = false;
-
 /* Authenticate user - exit if failed */
-if (!session_auth($Login_Error)) {
+if (!session_auth()) {
     set_language();
-    display_login_form($Login_Error ? gettext('Wrong username or password.') : null);
+    display_login_form(!empty($_POST['usernamefld']) ? gettext('Wrong username or password.') : null);
     exit;
 }
 
@@ -215,7 +275,7 @@ set_language();
 /*
  * redirect to first allowed page if requesting a wrong url
  */
-if ($_SERVER['REQUEST_URI']  == '/') {
+if ($_SERVER['REQUEST_URI'] == '/') {
     $page = '/index.php';
 } else {
     /* reconstruct page uri to use actual script location, mimic realpath() behaviour */
@@ -239,7 +299,7 @@ if ($_SESSION['Username'] != 'root' && !$acl->isPageAccessible($_SESSION['Userna
         header(url_safe("Location: /{$page}"));
         exit;
     } else {
-        display_error_form("201", gettext("No page assigned to this user! Click here to logout."));
+        display_error_form(gettext('No page assigned to this user! Click here to logout.'));
         exit;
     }
 }
@@ -247,8 +307,10 @@ if ($_SESSION['Username'] != 'root' && !$acl->isPageAccessible($_SESSION['Userna
 /*
  * determine if the user is allowed access to the requested page
  */
-function display_error_form($http_code, $desc)
+function display_error_form($text)
 {
+    global $g;
+
     $themename = htmlspecialchars(get_current_theme());
 
     ?><!doctype html>
@@ -266,26 +328,25 @@ function display_error_form($http_code, $desc)
     <meta name="copyright" content="" />
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
 
-    <title><?=$http_code?></title>
+    <title><?= gettext('Error') ?> | <?= $g['product_name'] ?></title>
 
     <link href="<?= cache_safe("/ui/themes/{$themename}/build/css/main.css") ?>" rel="stylesheet">
     <link href="<?= cache_safe("/ui/themes/{$themename}/build/images/favicon.png") ?>" rel="shortcut icon">
 
+    <script src="/ui/js/jquery-3.5.1.min.js"></script>
+
     <!--[if lt IE 9]><script src="//cdnjs.cloudflare.com/ajax/libs/html5shiv/3.7.2/html5shiv.min.js"></script><![endif]-->
   </head>
   <body class="page-login">
-    <div id="errordesc">
-      <h1>&nbsp;</h1>
-      <a href="/index.php?logout">
-      <p id="errortext" style="vertical-align: middle; text-align: center;">
-        <span style="color: #000000; font-weight: bold;">
-          <?=$desc;?>
-        </span>
+    <div id=container">
+      <p>&nbsp;</p>
+      <p style="text-align: center;">
+        <a href="/index.php?logout"><?= $text ?></a>
       </p>
     </div>
   </body>
-</html><?php
-} // end function
+</html>
+<?php }
 
 function display_login_form($Login_Error)
 {
@@ -329,7 +390,7 @@ function display_login_form($Login_Error)
     <meta name="copyright" content="" />
     <meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=1" />
 
-    <title><?=gettext("Login"); ?></title>
+    <title><?= gettext('Login') ?> | <?= $g['product_name'] ?></title>
 
     <link href="<?= cache_safe("/ui/themes/{$themename}/build/css/main.css") ?>" rel="stylesheet">
     <link href="<?= cache_safe("/ui/themes/{$themename}/build/images/favicon.png") ?>" rel="shortcut icon">
@@ -401,4 +462,4 @@ function display_login_form($Login_Error)
 
     </body>
   </html>
-<?php } // end function
+<?php }

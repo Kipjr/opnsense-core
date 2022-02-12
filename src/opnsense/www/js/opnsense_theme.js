@@ -32,7 +32,6 @@
 $(document).ready(function () {
     // traverse loaded css files
     var toggle_sidebar_loaded = false,
-    $window = $(window),
     winHeight = $(window).height(),
     mouse = 'mouseenter mouseleave',
     layer1_a = $('#mainmenu > div > a'),
@@ -43,8 +42,9 @@ $(document).ready(function () {
     mainmenu = $('#mainmenu'),
     countA = $('#mainmenu > div > a').length,
     footH = $('.page-foot').height(),
-    headerH = $('.navbar-header').height(),
-    navHeight = (countA * 70) + ((footH + headerH) - (20 + countA)),
+    headerH = $('.navbar').height(),
+    li_itemH = $('a.list-group-item').height(),
+    navHeight = (countA * 70) + ((footH + headerH) - (li_itemH + countA)),
     events = {
         mouseenter: function () {
             $('#navigation.col-sidebar-left').css('width', '415px');
@@ -52,15 +52,16 @@ $(document).ready(function () {
             if (that.next('div').hasClass('in')) {
                 /* no action needed */
             } else {
-                var offsetTop = that.offset().top;
-                var winscrTop = $window.scrollTop();
-                var divHeight = that.next('div').height();
-                var divTop = (offsetTop - winscrTop);
-                var currentHeight = (divTop + divHeight);
-                var thatTrigger = that.trigger('click');
+                var offsetTop = that.offset().top,
+                winscrTop = $(window).scrollTop(),
+                divHeight = that.next('div').height(),
+                divTop = (offsetTop - winscrTop),
+                currentHeight = (divTop + divHeight),
+                thatTrigger = that.trigger('click');
                 close_submenu(this);
-                if (currentHeight > winHeight) {
-                    var result = that.next('div').css('margin-top', -divHeight - (that.is(layer1_a) ? 3 : 0));
+                if (currentHeight > (winHeight - li_itemH)) {
+                    var divPos = (divHeight > divTop) ? - ((divHeight - divTop) - li_itemH) : 3,
+                    viewresult = that.next('div').css('margin-top', - divHeight - divPos);
                 }
             }
         },
@@ -131,16 +132,16 @@ $(document).ready(function () {
             $('.brand-logo').css('display', 'none');
             $('.brand-icon').css('display', 'inline-block');
             trigger_sidebar();
-            if (store && window.sessionStorage) {
-                sessionStorage.setItem('toggle_sidebar_preset', 1);
+            if (store && window.localStorage) {
+                localStorage.setItem('toggle_sidebar_preset', 1);
                 transition_duration(0);
             }
         } else {
             $('.brand-icon').css('display', 'none');
             $('.brand-logo').css('display', 'inline-block');
             $('#navigation.page-side.col-xs-12.col-sm-3.col-lg-2.hidden-xs').css('width', '');
-            if (store && window.sessionStorage) {
-                sessionStorage.setItem('toggle_sidebar_preset', 0);
+            if (store && window.localStorage) {
+                localStorage.setItem('toggle_sidebar_preset', 0);
                 mouse_events_off();
                 transition_duration(350);
             }
@@ -196,7 +197,7 @@ $(document).ready(function () {
                 navigation.removeClass('col-sidebar-hidden');
                 transition_duration(0);
                 toggle_btn.show();
-                if (window.sessionStorage && sessionStorage.getItem('toggle_sidebar_preset') == 1) {
+                if (window.localStorage && localStorage.getItem('toggle_sidebar_preset') == 1) {
                     opnsense_sidebar_toggle(false);
                 }
             }
@@ -206,7 +207,7 @@ $(document).ready(function () {
         toggle_btn.show();
 
         /* auto-collapse if previously requested */
-        if (window.sessionStorage && sessionStorage.getItem('toggle_sidebar_preset') == 1) {
+        if (window.localStorage && localStorage.getItem('toggle_sidebar_preset') == 1) {
             opnsense_sidebar_toggle(false);
         }
     }

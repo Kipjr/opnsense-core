@@ -130,13 +130,13 @@
       <value>default</value>
     </item>
     <item>
-      <descr><![CDATA[Maximum size of the IP input queue]]></descr>
-      <tunable>net.inet.ip.intr_queue_maxlen</tunable>
+      <descr><![CDATA[Disable CTRL+ALT+Delete reboot from keyboard.]]></descr>
+      <tunable>hw.syscons.kbd_reboot</tunable>
       <value>default</value>
     </item>
     <item>
-      <descr><![CDATA[Disable CTRL+ALT+Delete reboot from keyboard.]]></descr>
-      <tunable>hw.syscons.kbd_reboot</tunable>
+      <descr><![CDATA[Hint at default settings for serial console in case the autodetect is not working]]></descr>
+      <tunable>hw.uart.console</tunable>
       <value>default</value>
     </item>
     <item>
@@ -189,7 +189,7 @@
         and for the sender directly reachable, route and next hop is known.]]>
       </descr>
       <tunable>net.inet.ip.redirect</tunable>
-      <value>0</value>
+      <value>default</value>
     </item>
     <item>
       <descr><![CDATA[
@@ -301,9 +301,6 @@
     <syscontact/>
     <rocommunity>public</rocommunity>
   </snmpd>
-  <syslog>
-    <reverse/>
-  </syslog>
   <nat>
     <outbound>
       <mode>automatic</mode>

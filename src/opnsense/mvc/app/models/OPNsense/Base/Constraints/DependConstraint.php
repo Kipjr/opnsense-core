@@ -37,7 +37,6 @@ namespace OPNsense\Base\Constraints;
  */
 class DependConstraint extends BaseConstraint
 {
-
     /**
      * Executes validation, expects a list of fields in "addFields" which to check for content.
      * Fields are concerned empty if boolean false or containing an empty string
@@ -46,7 +45,7 @@ class DependConstraint extends BaseConstraint
      * @param string $attribute
      * @return boolean
      */
-    public function validate(\Phalcon\Validation $validator, $attribute)
+    public function validate(\Phalcon\Validation $validator, $attribute): bool
     {
         $node = $this->getOption('node');
         if ($node) {

@@ -40,7 +40,6 @@ use OPNsense\Core\Config;
  */
 class AliasController extends ApiMutableModelControllerBase
 {
-
     protected static $internalModelName = 'alias';
     protected static $internalModelClass = 'OPNsense\Firewall\Alias';
 
@@ -60,7 +59,7 @@ class AliasController extends ApiMutableModelControllerBase
         }
         return $this->searchBase(
             "aliases.alias",
-            array('enabled', 'name', 'description', 'type', 'content'),
+            array('enabled', 'name', 'description', 'type', 'content', 'current_items', 'last_updated'),
             "name",
             $filter_funct
         );
@@ -110,10 +109,11 @@ class AliasController extends ApiMutableModelControllerBase
         $response = $this->getBase("alias", "aliases.alias", $uuid);
         $selected_aliases = array_keys($response['alias']['content']);
         foreach ($this->getModel()->aliasIterator() as $alias) {
-            if (!in_array($alias['name'], $selected_aliases)) {
-                $response['alias']['content'][$alias['name']] = array(
+            // external aliases can't be nested (always empty according to our administration)
+            if (!in_array($alias['name'], $selected_aliases) && $alias['type'] != "external") {
+                $response['alias']['content'][$alias['name']] = [
                   "selected" => 0, "value" => $alias['name']
-                );
+                ];
             }
         }
         return $response;
@@ -153,7 +153,7 @@ class AliasController extends ApiMutableModelControllerBase
             if (!empty($uses)) {
                 $message = "";
                 foreach ($uses as $key => $value) {
-                    $message .= sprintf("\n[%s] %s", $key, $value);
+                    $message .= htmlspecialchars(sprintf("\n[%s] %s", $key, $value), ENT_NOQUOTES | ENT_HTML401);
                 }
                 $message = sprintf(gettext("Cannot delete alias. Currently in use by %s"), $message);
                 throw new \OPNsense\Base\UserException($message, gettext("Alias in use"));
@@ -243,6 +243,14 @@ class AliasController extends ApiMutableModelControllerBase
         } else {
             return array("status" => "failed");
         }
+    }
+
+    /**
+     * get aliases load stats and table-entries limit
+     */
+    public function getTableSizeAction()
+    {
+        return json_decode((new Backend())->configdRun('filter diag table_size'), true);
     }
 
     /**

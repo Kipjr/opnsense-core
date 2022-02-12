@@ -24,7 +24,7 @@
 # ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-PKG=pkg-static
+PKG="/usr/local/sbin/pkg-static"
 
 WANT_REBOOT=1
 
@@ -40,7 +40,7 @@ RQUERY=$(${PKG} rquery %v opnsense-update 2> /dev/null)
 
 if [ -n "${LQUERY}" -a -n "${RQUERY}" -a "${LQUERY%%_*}" != "${RQUERY%%_*}" ]; then
 	WANT_REBOOT=0
-elif opnsense-update -c; then
+elif opnsense-update -bk -c; then
 	WANT_REBOOT=0
 fi
 

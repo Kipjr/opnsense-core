@@ -41,13 +41,20 @@ class LogController extends IndexController
         $this->view->module = $module;
         $this->view->scope = $scope;
         $this->view->service = '';
+        $this->view->default_log_severity = "Warning";
 
         $service = $module == 'core' ? $scope : $module;
 
-        /* XXX manually hook up known services for now */
+        /* XXX manually hook up known services and log severities for now */
         switch ($service) {
+            case 'filter':
+                $this->view->default_log_severity = "Informational";
+                break;
             case 'ipsec':
                 $this->view->service = 'ipsec';
+                break;
+            case 'resolver':
+                $this->view->service = 'unbound';
                 break;
             case 'suricata':
                 $this->view->service = 'ids';

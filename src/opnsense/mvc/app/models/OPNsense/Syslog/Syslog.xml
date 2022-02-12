@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/Syslog</mount>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <items>
         <general>
             <enabled type="BooleanField">
@@ -22,6 +22,8 @@
                       <tcp4>TCP(4)</tcp4>
                       <udp6>UDP(6)</udp6>
                       <tcp6>TCP(6)</tcp6>
+                      <tls4>TLS(4)</tls4>
+                      <tls6>TLS(6)</tls6>
                   </OptionValues>
                 </transport>
                 <program type="JsonKeyValueStoreField">
@@ -80,10 +82,18 @@
                 <hostname type="HostnameField">
                     <Required>Y</Required>
                 </hostname>
+                <certificate type="CertificateField">
+                    <Required>N</Required>
+                    <ValidationMessage>Please select a valid certificate from the list</ValidationMessage>
+                </certificate>
                 <port type="PortField">
                     <Required>Y</Required>
                     <default>514</default>
                 </port>
+                <rfc5424 type="BooleanField">
+                  <default>0</default>
+                  <Required>Y</Required>
+                </rfc5424>
                 <description type="TextField">
                   <Required>N</Required>
                 </description>

@@ -36,8 +36,26 @@ require_once("plugins.inc.d/ntpd.inc");
 
 $a_ntpd = &config_read_array('ntpd');
 
-$copy_fields = array('orphan', 'statsgraph', 'logpeer', 'logsys', 'clockstats', 'loopstats', 'interface',
-                     'peerstats', 'noquery', 'noserve', 'kod', 'nomodify', 'nopeer', 'notrap', 'leapsec');
+$copy_fields = [
+    'clientmode',
+    'clockstats',
+    'interface',
+    'kod',
+    'limited',
+    'leapsec',
+    'logpeer',
+    'logsys',
+    'loopstats',
+    'nomodify',
+    'nopeer',
+    'noquery',
+    'noserve',
+    'notrap',
+    'orphan',
+    'peerstats',
+    'statsgraph',
+];
+
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig = array();
 
@@ -60,9 +78,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig['timeservers_host'] = array();
     $pconfig['timeservers_noselect'] = array();
     $pconfig['timeservers_prefer'] = array();
+    $pconfig['timeservers_iburst'] = array();
     if (!empty($config['system']['timeservers'])) {
         $pconfig['timeservers_noselect'] = !empty($a_ntpd['noselect']) ? explode(' ', $a_ntpd['noselect']) : array();
         $pconfig['timeservers_prefer'] = !empty($a_ntpd['prefer']) ? explode(' ', $a_ntpd['prefer']) : array();
+        $pconfig['timeservers_iburst'] = !empty($a_ntpd['iburst']) ? explode(' ', $a_ntpd['iburst']) : array();
         $pconfig['timeservers_host'] = explode(' ', $config['system']['timeservers']);
     }
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -77,7 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     // swap fields, really stupid field usage which we are not going to change now....
-    foreach (array('kod', 'nomodify', 'nopeer', 'notrap') as $fieldname) {
+    foreach (array('kod', 'limited', 'nomodify', 'nopeer', 'notrap') as $fieldname) {
         $pconfig[$fieldname] = empty($pconfig[$fieldname]);
     }
 
@@ -95,10 +115,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $config['system']['timeservers'] = trim(implode(' ', $pconfig['timeservers_host']));
         $a_ntpd['noselect'] = !empty($pconfig['timeservers_noselect']) ? trim(implode(' ', $pconfig['timeservers_noselect'])) : null;
         $a_ntpd['prefer'] = !empty($pconfig['timeservers_prefer']) ? trim(implode(' ', $pconfig['timeservers_prefer'])) : null;
+        $a_ntpd['iburst'] = !empty($pconfig['timeservers_iburst']) ? trim(implode(' ', $pconfig['timeservers_iburst'])) : null;
         $a_ntpd['interface'] = !empty($pconfig['interface']) ? implode(',', $pconfig['interface']) : null;
 
         // unset empty
-        foreach (array('noselect', 'prefer', 'interface') as $fieldname) {
+        foreach (array('noselect', 'prefer', 'iburst', 'interface') as $fieldname) {
             if (empty($a_ntpd[$fieldname])) {
                 unset($a_ntpd[$fieldname]);
             }
@@ -127,7 +148,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         write_config("Updated NTP Server Settings");
 
         rrd_configure();
-        ntpd_configure_start();
+        ntpd_configure_do();
+        system_cron_configure();
 
         header(url_safe('Location: /services_ntpd.php'));
         exit;
@@ -225,39 +247,6 @@ include("head.inc");
                 </thead>
                 <tbody>
                   <tr>
-                    <td><a id="help_for_interfaces" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext('Interface(s)') ?></td>
-                    <td>
-<?php
-                    $interfaces = get_configured_interface_with_descr();
-                    $carplist = get_configured_carp_interface_list();
-                    foreach ($carplist as $cif => $carpip) {
-                        $interfaces[$cif] = $carpip." (".get_vip_descr($carpip).")";
-                    }
-                    $aliaslist = get_configured_ip_aliases_list();
-                    foreach ($aliaslist as $aliasip => $aliasif) {
-                        $interfaces[$aliasip] = $aliasip." (".get_vip_descr($aliasip).")";
-                    }?>
-                      <select id="interface" name="interface[]" multiple="multiple" class="selectpicker">
-<?php
-                      foreach ($interfaces as $iface => $ifacename):
-                          if (!is_ipaddr(get_interface_ip($iface)) && !is_ipaddr($iface)) {
-                              continue;
-                          }?>
-                          <option value="<?=$iface;?>" <?= !empty($pconfig['interface']) && in_array($iface, $pconfig['interface']) ? 'selected="selected"' : '' ?>>
-                              <?=htmlspecialchars($ifacename);?>
-                          </option>
-<?php
-                      endforeach;?>
-                      </select>
-                      <div class="hidden" data-for="help_for_interfaces">
-                        <?=gettext("Interfaces without an IP address will not be shown."); ?>
-                        <br />
-                        <br /><?=gettext("Selecting no interfaces will listen on all interfaces with a wildcard."); ?>
-                        <br /><?=gettext("Selecting all interfaces will explicitly listen on only the interfaces/IPs specified."); ?>
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
                     <td><a id="help_for_timeservers" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext('Time servers') ?></td>
                     <td>
                       <table class="table table-striped table-condensed" id="timeservers_table">
@@ -266,6 +255,7 @@ include("head.inc");
                             <th></th>
                             <th><?=gettext("Network"); ?></th>
                             <th><?=gettext("Prefer"); ?></th>
+                            <th><?=gettext("Iburst"); ?></th>
                             <th><?=gettext("Do not use"); ?></th>
                           </tr>
                         </thead>
@@ -286,6 +276,9 @@ include("head.inc");
                               <input name="timeservers_prefer[]" class="ts_checkbox" type="checkbox" value="<?=$timeserver;?>" <?= !empty($pconfig['timeservers_prefer']) && in_array($timeserver, $pconfig['timeservers_prefer']) ? 'checked="checked"' : '' ?>/>
                             </td>
                             <td>
+                              <input name="timeservers_iburst[]" class="ts_checkbox" type="checkbox" value="<?=$timeserver;?>" <?= !empty($pconfig['timeservers_iburst']) && in_array($timeserver, $pconfig['timeservers_iburst']) ? 'checked="checked"' : '' ?>/>
+                            </td>
+                            <td>
                               <input name="timeservers_noselect[]" class="ts_checkbox" type="checkbox" value="<?=$timeserver;?>" <?= !empty($pconfig['timeservers_noselect']) && in_array($timeserver,  $pconfig['timeservers_noselect']) ? 'checked="checked"' : '' ?>/>
                             </td>
                           </tr>
@@ -302,20 +295,62 @@ include("head.inc");
                       </table>
                       <div class="hidden" data-for="help_for_timeservers">
                         <?=gettext('For best results three to five servers should be configured here.'); ?>
+                        <?=gettext('When no servers are specified NTP will be completely disabled.'); ?>
                         <br />
                         <?= gettext('The "prefer" option indicates that NTP should favor the use of this server more than all others.') ?>
+                        <br />
+                        <?= gettext('The "iburst" option enables faster clock synchronisation on startup at the expense of the peer.') ?>
                         <br />
                         <?= gettext('The "do not use" option indicates that NTP should not use this server for time, but stats for this server will be collected and displayed.') ?>
                       </div>
                     </td>
                   </tr>
                   <tr>
+                    <td><i class="fa fa-info-circle text-muted"></i> <?=gettext('Client mode') ?></td>
+                    <td>
+                      <input name="clientmode" type="checkbox" id="clientmode" <?=!empty($pconfig['clientmode']) ? ' checked="checked"' : '' ?> />
+                      <?= gettext('Quit NTP server immediately after time synchronisation') ?>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td><a id="help_for_interfaces" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext('Interfaces') ?></td>
+                    <td>
+<?php
+                    $interfaces = get_configured_interface_with_descr();
+                    $carplist = get_configured_carp_interface_list();
+                    foreach ($carplist as $cif => $carpip) {
+                        $interfaces[$cif] = $carpip." (".get_vip_descr($carpip).")";
+                    }
+                    $aliaslist = get_configured_ip_aliases_list();
+                    foreach ($aliaslist as $aliasip => $aliasif) {
+                        $interfaces[$aliasip] = $aliasip." (".get_vip_descr($aliasip).")";
+                    }?>
+                      <select id="interface" name="interface[]" multiple="multiple" class="selectpicker" title="<?= html_safe(gettext('All (recommended)')) ?>">
+<?php
+                      foreach ($interfaces as $iface => $ifacename):
+                          if (!is_ipaddr(get_interface_ip($iface)) && !is_ipaddr($iface)) {
+                              continue;
+                          }?>
+                          <option value="<?=$iface;?>" <?= !empty($pconfig['interface']) && in_array($iface, $pconfig['interface']) ? 'selected="selected"' : '' ?>>
+                              <?=htmlspecialchars($ifacename);?>
+                          </option>
+<?php
+                      endforeach;?>
+                      </select>
+                      <div class="hidden" data-for="help_for_interfaces">
+                        <?=gettext("Interfaces without an IP address will not be shown."); ?>
+                        <br /><?=gettext("Selecting no interfaces will listen on all interfaces with a wildcard."); ?>
+                        <br /><?=gettext("Selecting all interfaces will explicitly listen on only the interfaces/IPs specified."); ?>
+                      </div>
+                    </td>
+                  </tr>
+                  <tr>
                     <td><a id="help_for_orphan" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext('Orphan mode') ?></td>
                     <td>
-                      <input name="orphan" type="text" value="<?=$pconfig['orphan']?>" />
+                      <input name="orphan" type="text" value="<?=$pconfig['orphan']?>" placeholder="12" />
                       <div class="hidden" data-for="help_for_orphan">
                         <?=gettext("(0-15)");?><br />
-                        <?=gettext("Orphan mode allows the system clock to be used when no other clocks are available. The number here specifies the stratum reported during orphan mode and should normally be set to a number high enough to insure that any other servers available to clients are preferred over this server. (default: 12)."); ?>
+                        <?=gettext("Orphan mode allows the system clock to be used when no other clocks are available. The number here specifies the stratum reported during orphan mode and should normally be set to a number high enough to insure that any other servers available to clients are preferred over this server."); ?>
                       </div>
                     </td>
                   </tr>
@@ -323,17 +358,17 @@ include("head.inc");
                     <td><i class="fa fa-info-circle text-muted"></i> <?=gettext('NTP graphs') ?></td>
                     <td>
                       <input name="statsgraph" type="checkbox" id="statsgraph" <?=!empty($pconfig['statsgraph']) ? " checked=\"checked\"" : ""; ?> />
-                      <?= gettext('Enable RRD graphs of NTP statistics (default: disabled).') ?>
+                      <?= gettext('Enable RRD graphs of NTP statistics') ?>
                     </td>
                   </tr>
                   <tr>
                     <td><a id="help_for_syslog" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext('Syslog logging') ?></td>
                     <td>
                       <input name="logpeer" type="checkbox" <?=!empty($pconfig['logpeer']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable logging of peer messages (default: disabled)."); ?>
+                      <?=gettext("Enable logging of peer messages"); ?>
                       <br />
                       <input name="logsys" type="checkbox" <?=!empty($pconfig['logsys']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable logging of system messages (default: disabled)."); ?>
+                      <?=gettext("Enable logging of system messages"); ?>
                       <div class="hidden" data-for="help_for_syslog">
                         <?=gettext("These options enable additional messages from NTP to be written to the System Log");?> (<a href="/ui/diagnostics/log/core/ntpd"><?=gettext("Status > System Logs > NTP"); ?></a>).
                       </div>
@@ -349,13 +384,13 @@ include("head.inc");
                       <?= gettext("These options will create persistent daily log files in /var/log/ntp.") ?>
                       <br /><br />
                       <input name="clockstats" type="checkbox" id="clockstats"<?=!empty($pconfig['clockstats']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable logging of reference clock statistics (default: disabled)."); ?>
+                      <?=gettext("Enable logging of reference clock statistics"); ?>
                       <br />
                       <input name="loopstats" type="checkbox" id="loopstats"<?=!empty($pconfig['loopstats']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable logging of clock discipline statistics (default: disabled)."); ?>
+                      <?=gettext("Enable logging of clock discipline statistics"); ?>
                       <br />
                       <input name="peerstats" type="checkbox" id="peerstats"<?=!empty($pconfig['peerstats']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable logging of NTP peer statistics (default: disabled)."); ?>
+                      <?=gettext("Enable logging of NTP peer statistics"); ?>
                       </div>
                     </td>
                   </tr>
@@ -366,25 +401,28 @@ include("head.inc");
                       <input type="button" id="showrestrictbox" class="btn btn-default btn-xs" value="<?= html_safe(gettext('Advanced')) ?>" /> - <?=gettext("Show access restriction options");?>
                       </div>
                       <div id="showrestrict" style="display:none">
-                      <?=gettext("These options control access to NTP from the WAN."); ?>
+                      <?=gettext("These options control access to NTP."); ?>
                       <br /><br />
                       <input name="kod" type="checkbox" id="kod"<?=empty($pconfig['kod']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Enable Kiss-o'-death packets (default: enabled)."); ?>
+                      <?=gettext("Enable Kiss-o'-death packets"); ?>
+                      <br />
+                      <input name="limited" type="checkbox" id="limited"<?=empty($pconfig['limited']) ? " checked=\"checked\"" : ""; ?> />
+                      <?=gettext("Enable Rate limiting"); ?>
                       <br />
                       <input name="nomodify" type="checkbox" id="nomodify"<?=empty($pconfig['nomodify']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Deny state modifications (i.e. run time configuration) by ntpq and ntpdc (default: enabled)."); ?>
+                      <?=gettext("Deny state modifications (i.e. run time configuration) by ntpq and ntpdc"); ?>
                       <br />
                       <input name="noquery" type="checkbox" id="noquery"<?=!empty($pconfig['noquery']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Disable ntpq and ntpdc queries (default: disabled)."); ?>
+                      <?=gettext("Disable ntpq and ntpdc queries"); ?>
                       <br />
                       <input name="noserve" type="checkbox" id="noserve"<?=!empty($pconfig['noserve']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Disable all except ntpq and ntpdc queries (default: disabled)."); ?>
+                      <?=gettext("Disable all except ntpq and ntpdc queries"); ?>
                       <br />
                       <input name="nopeer" type="checkbox" id="nopeer"<?=empty($pconfig['nopeer']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Deny packets that attempt a peer association (default: enabled)."); ?>
+                      <?=gettext("Deny packets that attempt a peer association"); ?>
                       <br />
                       <input name="notrap" type="checkbox" id="notrap"<?=empty($pconfig['notrap']) ? " checked=\"checked\"" : ""; ?> />
-                      <?=gettext("Deny mode 6 control message trap service (default: enabled)."); ?>
+                      <?=gettext("Deny mode 6 control message trap service"); ?>
                       </div>
                     </td>
                   </tr>

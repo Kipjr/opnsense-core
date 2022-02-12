@@ -1,35 +1,35 @@
 <?php
 
 /*
- *  Copyright (C) 2016-2019 EURO-LOG AG
- *  Copyright (c) 2019 Deciso B.V.
- *  All rights reserved.
+ * Copyright (C) 2016-2019 EURO-LOG AG
+ * Copyright (c) 2019 Deciso B.V.
+ * All rights reserved.
  *
- *  Redistribution and use in source and binary forms, with or without
- *  modification, are permitted provided that the following conditions are met:
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
  *
- *  1. Redistributions of source code must retain the above copyright notice,
- *     this list of conditions and the following disclaimer.
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
  *
- *  2. Redistributions in binary form must reproduce the above copyright
- *     notice, this list of conditions and the following disclaimer in the
- *     documentation and/or other materials provided with the distribution.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
  *
- *  THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
- *  INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
- *  AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
- *  AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
- *  OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- *  SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- *  INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- *  CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- *  ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- *  POSSIBILITY OF SUCH DAMAGE.
+ * THIS SOFTWARE IS PROVIDED ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES,
+ * INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY
+ * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE
+ * AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY,
+ * OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
-
 
 namespace OPNsense\Monit;
 
+use Phalcon\Messages\Message;
 use OPNsense\Base\BaseModel;
 
 /**
@@ -150,7 +150,7 @@ class Monit extends BaseModel
     /**
      * validate full model using all fields and data in a single (1 deep) array
      * @param bool $validateFullModel validate full model or only changed fields
-     * @return \Phalcon\Validation\Message\Group
+     * @return \Phalcon\Messages\Messages
      */
     public function performValidation($validateFullModel = false)
     {
@@ -173,7 +173,7 @@ class Monit extends BaseModel
                                     $node->isFieldChanged() &&
                                     $this->isTestServiceRelated($testUuid)
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         sprintf(
                                             gettext("Cannot change the test type to '%s'. Test '%s' is linked to a service."),
                                             (string)$node,
@@ -192,7 +192,7 @@ class Monit extends BaseModel
                                     strcmp((string)$parentNode->type, $type) != 0 &&
                                     $this->isTestServiceRelated($parentNode->getAttribute('uuid'))
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         sprintf(
                                             gettext("Condition '%s' would change the type of the test '%s' but it is linked to a service."),
                                             (string)$node,
@@ -224,7 +224,7 @@ class Monit extends BaseModel
                                                     $test->type->getNodeData()[(string)$test->type]['value']
                                                 );
                                                 $messages->appendMessage(
-                                                    new \Phalcon\Validation\Message($validationMsg, $key)
+                                                    new Message($validationMsg, $key)
                                                 );
                                             }
                                         }
@@ -236,7 +236,7 @@ class Monit extends BaseModel
                                     empty((string)$node) && (string)$parentNode->type == 'process'
                                       && empty((string)$parentNode->match)
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Please set at least one of Pidfile or Match."),
                                         $key
                                     ));
@@ -247,7 +247,7 @@ class Monit extends BaseModel
                                     empty((string)$node) && (string)$parentNode->type == 'process'
                                       && empty((string)$parentNode->pidfile)
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Please set at least one of Pidfile or Match."),
                                         $key
                                     ));
@@ -255,7 +255,7 @@ class Monit extends BaseModel
                                 break;
                             case 'address':
                                 if (empty((string)$node) && (string)$parentNode->type == 'host') {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Address is mandatory for 'Remote Host' checks."),
                                         $key
                                     ));
@@ -263,7 +263,7 @@ class Monit extends BaseModel
                                     empty((string)$node) && (string)$parentNode->type == 'network'
                                       && empty((string)$parentNode->interface)
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Please set at least one of Address or Interface."),
                                         $key
                                     ));
@@ -274,7 +274,7 @@ class Monit extends BaseModel
                                     empty((string)$node) && (string)$parentNode->type == 'network'
                                       && empty((string)$parentNode->address)
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Please set at least one of Address or Interface."),
                                         $key
                                     ));
@@ -287,7 +287,7 @@ class Monit extends BaseModel
                                         ['file', 'fifo', 'filesystem', 'directory']
                                     )
                                 ) {
-                                    $messages->appendMessage(new \Phalcon\Validation\Message(
+                                    $messages->appendMessage(new Message(
                                         gettext("Path is mandatory."),
                                         $key
                                     ));

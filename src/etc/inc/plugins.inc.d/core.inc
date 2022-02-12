@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2018 Deciso B.V.
+ * Copyright (C) 2018-2021 Deciso B.V.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -79,31 +79,67 @@ function core_services()
         'name' => 'login',
     );
 
-    if (empty($config['syslog']['disable_clog'])) {
-        $services[] = array(
-            'description' => gettext('Legacy Syslog Daemon'),
-            'php' => array(
-                "stop" => array('system_syslogd_stop'),
-                "start" => array('system_syslogd_start'),
-                "restart" => array('system_syslogd_start')
-            ),
-            'pidfile' => '/var/run/syslog.pid',
-            'name' => 'syslogd',
-        );
-    }
+    $services[] = array(
+        'description' => gettext('System routing'),
+        'php' => array(
+            "restart" => array('system_routing_configure')
+        ),
+        'nocheck' => true,
+        'name' => 'routing',
+    );
+
+    $services[] = array(
+        'description' => gettext('System tunables'),
+        'php' => array(
+            "restart" => array('system_sysctl_configure')
+        ),
+        'nocheck' => true,
+        'name' => 'sysctl',
+    );
+
+    $services[] = array(
+        'description' => gettext('Cron'),
+        'php' => array(
+            'start' => ['system_cron_configure'],
+            'restart' => ['system_cron_configure'],
+        ),
+        'pidfile' => '/var/run/cron.pid',
+        'name' => 'cron',
+    );
 
     $services[] = array(
         'description' => gettext('Syslog-ng Daemon'),
         'php' => array(
-            "stop" => array('system_syslogd_stop'),
-            "start" => array('system_syslogd_start'),
-            "restart" => array('system_syslogd_start')
+            'stop' => array('system_syslog_stop'),
+            'start' => array('system_syslog_start'),
+            'restart' => array('system_syslog_start')
         ),
         'pidfile' => '/var/run/syslog-ng.pid',
         'name' => 'syslog-ng',
     );
 
+    $services[] = array(
+        'pidfile' => '/var/run/lighty-webConfigurator.pid',
+        'description' => gettext('Web GUI'),
+        'php' => array(
+            'restart' => array('webgui_configure_delayed')
+        ),
+        'locked' => true,
+        'name' => 'webgui',
+    );
+
     return $services;
+}
+
+function core_device_names($key, $sections)
+{
+    $names = [];
+
+    foreach (call_user_func_array('config_read_array', $sections) as $dev) {
+        $names[] = $dev[$key];
+    }
+
+    return $names;
 }
 
 function core_devices()
@@ -111,11 +147,31 @@ function core_devices()
     $devices = array();
 
     # XXX is a plugin collection...
-    $devices[] = array('pattern' => '^bridge', 'volatile' => true);
+    $devices[] = [
+        'names' => core_device_names('bridgeif', ['bridges', 'bridged']),
+        'function' => 'interfaces_bridge_configure',
+        'pattern' => '^bridge',
+        'volatile' => true,
+    ];
+
+    $devices[] = [
+        'names' => core_device_names('gifif', ['gifs', 'gif']),
+        'function' => 'interfaces_gif_configure',
+        'configurable' => false,
+        'pattern' => '^gif',
+        'volatile' => true,
+    ];
+
+    $devices[] = [
+        'names' => core_device_names('greif', ['gres', 'gre']),
+        'function' => 'interfaces_gre_configure',
+        'configurable' => false,
+        'pattern' => '^gre',
+        'volatile' => true,
+    ];
+
     $devices[] = array('pattern' => '^cua', 'volatile' => true);
     $devices[] = array('pattern' => '^enc', 'volatile' => true);
-    $devices[] = array('pattern' => '^gif', 'volatile' => true, 'configurable' => false);
-    $devices[] = array('pattern' => '^gre', 'volatile' => true, 'configurable' => false);
     $devices[] = array('pattern' => '^ipsec', 'volatile' => true, 'configurable' => false);
     $devices[] = array('pattern' => '^l2tp', 'volatile' => true);
     $devices[] = array('pattern' => '^lagg', 'volatile' => true);
@@ -129,8 +185,8 @@ function core_devices()
     $devices[] = array('pattern' => '^wg', 'volatile' => true);
     $devices[] = array('pattern' => '^zt', 'volatile' => true);
     $devices[] = array('pattern' => '_stf', 'volatile' => true);
+    $devices[] = array('pattern' => '_vlan', 'volatile' => true);
     $devices[] = array('pattern' => '_wlan', 'volatile' => true);
-    $devices[] = array('pattern' => 'vlan', 'volatile' => true);
 
     return $devices;
 }
@@ -141,12 +197,12 @@ function core_cron()
 
     $jobs = array();
 
-    $jobs[]['autocron'] = array('/usr/local/sbin/expiretable -v -t 3600 sshlockout', '1');
-    $jobs[]['autocron'] = array('/usr/local/sbin/expiretable -v -t 3600 virusprot', '2');
-    $jobs[]['autocron'] = array('/usr/local/etc/rc.expireaccounts', '3');
-    $jobs[]['autocron'] = array('/usr/local/opnsense/scripts/syslog/log_archive ', '4');
-
+    $jobs[]['autocron'] = array('/usr/local/sbin/configctl -d syslog archive', '1');
+    $jobs[]['autocron'] = array('/usr/local/sbin/expiretable -v -t 3600 sshlockout', '2');
+    $jobs[]['autocron'] = array('/usr/local/sbin/expiretable -v -t 3600 virusprot', '3');
+    $jobs[]['autocron'] = array('/usr/local/etc/rc.expireaccounts', '4');
     $jobs[]['autocron'] = array('/usr/local/sbin/ping_hosts.sh', '*/4');
+    $jobs[]['autocron'] = array('/usr/local/sbin/configctl -d firmware changelog cron', '0', '22');
 
     if (!empty($config['system']['rrdbackup']) && $config['system']['rrdbackup'] > 0) {
         $jobs[]['autocron'] = array(
@@ -183,10 +239,10 @@ function core_cron()
     if (!empty($config['system']['dhparamusage'])) {
         switch ($config['system']['dhparamusage']) {
             case 'weekly':
-                $jobs[]['autocron'] = array('configctl system ssl dhparam', '30', '3', '*', '*', '0');
+                $jobs[]['autocron'] = array('/usr/local/sbin/configctl -d system ssl dhparam', '30', '3', '*', '*', '0');
                 break;
             case 'monthly':
-                $jobs[]['autocron'] = array('configctl system ssl dhparam', '30', '3', '1', '*', '*');
+                $jobs[]['autocron'] = array('/usr/local/sbin/configctl -d system ssl dhparam', '30', '3', '1', '*', '*');
                 break;
             default:
                 /* cron job operated by user manually or RFC 7919 */
@@ -196,7 +252,7 @@ function core_cron()
 
     foreach ((new OPNsense\Backup\BackupFactory())->listProviders() as $classname => $provider) {
         if ($provider['handle']->isEnabled()) {
-            $jobs[]['autocron'] = array('configctl system remote backup', 0, 1);
+            $jobs[]['autocron'] = array('/usr/local/sbin/configctl -d system remote backup', 0, 1);
             break;
         }
     }
@@ -208,6 +264,7 @@ function core_syslog()
 {
     $logfacilities = array();
 
+    $logfacilities['audit'] = array('facility' => array('audit'));
     $logfacilities['configd'] = array('facility' => array('configd.py'));
     $logfacilities['dhcpd'] = array('facility' => array('dhcpd', 'dhcrelay'));
     $logfacilities['filter'] = array('facility' => array('filterlog'));
@@ -251,9 +308,99 @@ function core_xmlrpc_sync()
     $result = array();
 
     $result[] = array(
+        'description' => gettext('Dashboard'),
+        'help' => gettext('Synchronize dashboard widgets.'),
+        'section' => 'widgets',
+        'id' => 'widgets',
+    );
+    $result[] = array(
+        'description' => gettext('Users and Groups'),
+        'help' => gettext('Synchronize the users and groups over to the other HA host.'),
+        'section' => 'system.user,system.group',
+        'id' => 'users',
+        'services' => ["login"],
+    );
+    $result[] = array(
+        'description' => gettext('Auth Servers'),
+        'help' => gettext('Synchronize the authentication servers (e.g. LDAP, RADIUS) over to the other HA host.'),
+        'section' => 'system.authserver',
+        'id' => 'authservers',
+        'services' => ["login"],
+    );
+    $result[] = array(
+        'description' => gettext('Certificates'),
+        'help' => gettext('Synchronize the Certificate Authorities, Certificates, and Certificate Revocation Lists over to the other HA host.'),
+        'section' => 'cert,ca,crl',
+        'id' => 'certs',
+    );
+    $result[] = array(
+        'description' => gettext('DHCPD'),
+        'help' => gettext('Synchronize the DHCP Server settings over to the other HA host. This only applies to DHCP for IPv4.'),
+        'section' => 'dhcpd',
+        'id' => 'dhcpd',
+        'services' => ["dhcpd"],
+    );
+    $result[] = array(
+        'description' => gettext('DHCPv4: Relay'),
+        'section' => 'dhcrelay',
+        'id' => 'dhcrelay',
+        'services' => ["dhcrelay"],
+    );
+    $result[] = array(
+        'description' => gettext('DHCPDv6'),
+        'help' => gettext('Synchronize DHCPv6 including router advertisements.'),
+        'section' => 'dhcpdv6',
+        'id' => 'dhcpdv6',
+        'services' => ["dhcpdv6", "radvd"],
+    );
+    $result[] = array(
+        'description' => gettext('DHCPv6: Relay'),
+        'section' => 'dhcrelay6',
+        'id' => 'dhcrelay6',
+        'services' => ["dhcrelay6"],
+    );
+    $result[] = array(
+        'description' => gettext('Virtual IPs'),
+        'help' => gettext('Synchronize the CARP Virtual IPs to the other HA host.'),
+        'section' => 'virtualip',
+        'id' => 'virtualip',
+    );
+    $result[] = array(
+        'description' => gettext('Static Routes'),
+        'help' => gettext('Synchronize the Static Route configuration and Gateways to the other HA host.'),
+        'section' => 'staticroutes,gateways',
+        'id' => 'staticroutes',
+        'services' => ["routing", "dpinger"],
+    );
+    $result[] = array(
         'description' => gettext('Network Time'),
         'section' => 'ntpd,system.timeservers',
         'id' => 'ntpd',
+        'services' => ["ntpd"],
+    );
+    $result[] = array(
+        'description' => gettext('Syslog'),
+        'section' => 'syslog,OPNsense.Syslog',
+        'id' => 'syslog',
+        'services' => ["syslogd"],
+    );
+    $result[] = array(
+        'description' => gettext('Cron'),
+        'section' => 'OPNsense.cron',
+        'id' => 'cron',
+        'services' => ["cron"],
+    );
+    $result[] = array(
+        'description' => gettext('System Tunables'),
+        'section' => 'sysctl',
+        'id' => 'sysctl',
+        'services' => ["sysctl"],
+    );
+    $result[] = array(
+        'description' => gettext('Web GUI'),
+        'section' => 'system.webgui',
+        'id' => 'webgui',
+        'services' => ["webgui"],
     );
 
     return $result;
@@ -283,7 +430,7 @@ function core_user_changed_groups($verbose = false, $username)
                 foreach ($config['system']['group'] as $group) {
                     $in_group = !empty($group['member']) && in_array($user['uid'], $group['member']);
                     $to_remove = in_array($group['name'], $current_groups) && !$in_group;
-                    $to_add =  !in_array($group['name'], $current_groups) && $in_group;
+                    $to_add = !in_array($group['name'], $current_groups) && $in_group;
                     if ($to_remove || $to_add) {
                         local_group_set($group);
                     }

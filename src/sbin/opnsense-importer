@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Copyright (c) 2014-2020 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2022 Franco Fichtner <franco@opnsense.org>
 # Copyright (c) 2004-2009 Scott Ullrich <sullrich@gmail.com>
 #
 # Redistribution and use in source and binary forms, with or without
@@ -26,6 +26,7 @@
 
 INSTALL="/.probe.for.install.media"
 MNT="/tmp/hdrescue"
+SHELL="/bin/sh"
 WAIT="........."
 
 if [ "$(id -u)" != "0" ]; then
@@ -34,6 +35,7 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 DO_BOOT=
+DO_MANUAL=
 DO_PASSWORD=
 DO_ZFS=
 
@@ -71,10 +73,13 @@ bootstrap_and_exit()
 	exit "${RET}"
 }
 
-while getopts bpz OPT; do
+while getopts bmpz OPT; do
 	case ${OPT} in
 	b)
 		DO_BOOT="-b"
+		;;
+	m)
+		DO_MANUAL="-m"
 		;;
 	p)
 		DO_PASSWORD="-p"
@@ -125,11 +130,6 @@ zfs_load()
 	fi
 
 	export POOLS=$(zfs_probe)
-	if [ -n "${POOLS}" ]; then
-		# insert missing newline due to $()
-		export POOLS="${POOLS}
-"
-	fi
 }
 
 zfs_unload()
@@ -141,13 +141,15 @@ zfs_unload()
 
 zfs_probe()
 {
-	zpool import -aNf
+	zpool import -aNf 2> /dev/null
 
 	zpool get -H cachefile | while read ZPOOL ZMORE; do
+		ZGUID=$(zpool get -H guid ${ZPOOL} | awk '{ print $3 }')
+		ZSIZE=$(zpool get -H size ${ZPOOL} | awk '{ print $3 }')
 		if [ "$(mount | grep -w / | grep -c ${ZPOOL})" = "0" ]; then
-			zpool export ${ZPOOL} >/dev/null 2>/dev/null
+			zpool export ${ZPOOL} > /dev/null 2> /dev/null
 		fi
-		echo "zfs/${ZPOOL}"
+		echo "${ZPOOL} ${ZGUID} ${ZSIZE}"
 	done
 }
 
@@ -163,9 +165,9 @@ import_start()
 		# GPT UFS
 		export PART="/dev/${DEV}p3"
 		return 0
-	elif [ "$(echo ${POOLS} | grep -c ^${DEV}$)" != "0" ]; then
+	elif [ "$(echo ${POOLS} | grep -c "^${DEV} ")" != "0" ]; then
 		# ZFS POOL
-		export POOL="${DEV##zfs/}"
+		export POOL="${DEV}"
 		return 0
 	elif [ -e "/dev/${DEV}s1" ]; then
 		# MBR MSDOS
@@ -192,7 +194,9 @@ POOLS=
 if [ -n "${DO_ZFS}" ]; then
 	zfs_load
 	zfs_unload
-	echo -n "${POOLS}"
+	if [ -n "${POOLS}" ]; then
+		echo "${POOLS}"
+	fi
 	exit 0
 fi
 
@@ -219,7 +223,18 @@ if [ -n "${DO_DEV}" ]; then
 	fi
 fi
 
-DEVS=$(camcontrol devlist; gmirror status -s; graid status -s; echo -n "${POOLS}")
+DEVS=$(
+	camcontrol devlist
+	echo "${POOLS}" | while read ZPOOL ZGUID ZSIZE ZMORE; do
+		if [ -z "${ZPOOL}" ]; then
+			continue
+		fi
+		printf "%-35s%s\n" "<${ZGUID} ${ZSIZE}>" \
+		    "ZFS pool (${ZPOOL})"
+	done
+	gmirror status -s
+	graid status -s
+)
 
 while : ; do
 	if [ -z "${DO_DEV}" ]; then
@@ -280,7 +295,10 @@ while : ; do
 		continue
 	fi
 
-	if [ -n "${DO_PASSWORD}" ]; then
+	if [ -n "${DO_MANUAL}" ]; then
+		echo "# Manual shell mode, old file system available at ${MNT}"
+		${SHELL}
+	elif [ -n "${DO_PASSWORD}" ]; then
 		if [ -f "${MNT}/usr/local/sbin/opnsense-shell" ]; then
 			mount -t devfs devfs ${MNT}/dev
 			chroot ${MNT} /bin/sh /etc/rc.d/ldconfig start
@@ -298,6 +316,16 @@ while : ; do
 			fi
 		fi
 	elif [ -f "${MNT}/conf/config.xml" ]; then
+		if [ "$(grep -cx -- '---- BEGIN config.xml ----' ${MNT}/conf/config.xml)" != "0" ]; then
+			echo "The file /conf/config.xml is encrypted."
+
+			if [ -n "${DO_DEV}" ]; then
+				bootstrap_and_exit 1
+			fi
+
+			continue
+		fi
+
 		rm -rf /conf/*
 
 		for FILE in captiveportal.sqlite config.xml dhcpleases.tgz dhcp6c_duid netflow.tgz rrd.tgz; do
@@ -334,7 +362,7 @@ while : ; do
 	fi
 done
 
-if [ -z "${DO_BOOT}" ]; then
+if [ -z "${DO_BOOT}${DO_MANUAL}${DO_PASSWORD}" ]; then
 	echo "Please reboot."
 fi
 

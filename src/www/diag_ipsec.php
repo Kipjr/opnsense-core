@@ -40,15 +40,18 @@ require_once("plugins.inc.d/ipsec.inc");
 function ipsec_conn_description($conn)
 {
     global $config;
+
     $ipsec_conn_seq = substr(explode('-', $conn)[0],3);
-    if (isset($config['ipsec']['phase1']) && is_array($config['ipsec']['phase1'])) {
+
+    if (!empty($config['ipsec']['phase1'])) {
         foreach ($config['ipsec']['phase1'] as $phase1) {
             if ($phase1['ikeid'] == $ipsec_conn_seq && !empty($phase1['descr'])) {
                 return $phase1['descr'];
             }
         }
     }
-    return "";
+
+    return '';
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -187,6 +190,7 @@ include("head.inc");
                           <table class="table table-condensed">
                             <thead>
                               <tr>
+                                <th><?= gettext("Remote Host");?></th>
                                 <th><?= gettext("Local subnets");?></th>
                                 <th class="hidden-xs hidden-sm"><?= gettext("SPI(s)");?></th>
                                 <th><?= gettext("Remote subnets");?></th>
@@ -198,6 +202,9 @@ include("head.inc");
                             <?php foreach ($ipsec_conn['sas'] as $sa_key => $sa):?>
                               <?php foreach ($sa['child-sas'] as $child_sa_key => $child_sa):?>
                               <tr>
+                                <td>
+                                  <?= $sa['remote-host'] ?>
+                                </td>
                                 <td>
                                   <?= implode('<br/>', $child_sa['local-ts'])?>
                                 </td>

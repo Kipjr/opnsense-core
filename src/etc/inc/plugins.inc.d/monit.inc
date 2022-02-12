@@ -65,7 +65,15 @@ function monit_xmlrpc_sync()
         'description' => gettext('Monit System Monitoring'),
         'section' => 'OPNsense.monit',
         'id' => 'monit',
+        'services' => ["monit"],
     );
 
     return $result;
+}
+
+function monit_syslog()
+{
+    $logfacilities = [];
+    $logfacilities['monit'] = ['facility' => ['monit']];
+    return $logfacilities;
 }

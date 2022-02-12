@@ -18,7 +18,7 @@
  * @copyright 2003-2005 The PHP Group
  * @license   BSD License http://www.opensource.org/licenses/bsd-license.php
  * @version   CVS: $Id$
- * @link      http://pear.php.net/package/Net_IPv6
+ * @link      https://pear.php.net/package/Net_IPv6
  */
 
 // {{{ constants
@@ -116,11 +116,10 @@ define("NET_IPV6_UNKNOWN_TYPE", 1001);
  * @copyright 2003-2010 The PHP Group
  * @license   BSD License http://www.opensource.org/licenses/bsd-license.php
  * @version   Release: 1.1.0RC5
- * @link      http://pear.php.net/package/Net_IPv6
+ * @link      https://pear.php.net/package/Net_IPv6
  */
 class Net_IPv6
 {
-
     // {{{ separate()
     /**
      * Separates an IPv6 address into the address and a prefix length part
@@ -680,7 +679,7 @@ class Net_IPv6
 
         if (strstr($ip, '.')) {
             $pos      = strrpos($ip, ':');
-            $ip{$pos} = '_';
+            $ip[$pos] = '_';
             $ipPart   = explode('_', $ip);
             return $ipPart;
         } else {

@@ -1,5 +1,5 @@
 """
-    Copyright (c) 2017-2019 Ad Schellevis <ad@opnsense.org>
+    Copyright (c) 2017-2021 Ad Schellevis <ad@opnsense.org>
     All rights reserved.
 
     Redistribution and use in source and binary forms, with or without
@@ -34,8 +34,11 @@ import ipaddress
 import dns.resolver
 import syslog
 from hashlib import md5
+from dns.exception import DNSException
 from . import geoip
+from . import net_wildcard_iterator, AsyncDNSResolver
 from .arpcache import ArpCache
+from .interface import InterfaceParser
 
 class Alias(object):
     def __init__(self, elem, known_aliases=[], ttl=-1, ssl_no_verify=False, timeout=120):
@@ -48,8 +51,6 @@ class Alias(object):
             :return: None
         """
         self._known_aliases = known_aliases
-        self._dnsResolver = dns.resolver.Resolver()
-        self._dnsResolver.timeout = 2
         self._is_changed = None
         self._has_expired = None
         self._ttl = ttl
@@ -57,6 +58,7 @@ class Alias(object):
         self._timeout = timeout
         self._name = None
         self._type = None
+        self._interface = None
         self._proto = 'IPv4,IPv6'
         self._items = list()
         self._resolve_content = set()
@@ -67,6 +69,8 @@ class Alias(object):
                 self._proto = subelem.text
             elif subelem.tag == 'name':
                 self._name = subelem.text
+            elif subelem.tag == 'interface':
+                self._interface = subelem.text
             elif subelem.tag == 'ttl':
                 tmp = subelem.text.strip()
                 if len(tmp.split('.')) <= 2 and tmp.replace('.', '').isdigit():
@@ -84,6 +88,7 @@ class Alias(object):
         self._filename_alias_hash = '/var/db/aliastables/%s.md5.txt' % self._name
         # the generated alias contents, without dependencies
         self._filename_alias_content = '/var/db/aliastables/%s.self.txt' % self._name
+        self._dnsResolver = AsyncDNSResolver(self._name)
 
     def _parse_address(self, address):
         """ parse addresses and hostnames, yield only valid addresses and networks
@@ -91,7 +96,15 @@ class Alias(object):
             :return: boolean
         """
         address = address.strip()
-        if address.find('/') > -1:
+        if address.find('/') > -1 and not address.split('/')[-1].isdigit():
+            # wildcard netmask
+            for idx, item in enumerate(net_wildcard_iterator(address.lstrip('!'))):
+                if idx > 65535:
+                    # overflow
+                    syslog.syslog(syslog.LOG_ERR, 'alias table %s overflow' % self._name)
+                    break
+                yield "!%s" % item if address.startswith('!') else str(item)
+        elif address.find('/') > -1:
             # provided address could be a network
             try:
                 ipaddress.ip_network(str(address.lstrip('!')), strict=False)
@@ -116,19 +129,8 @@ class Alias(object):
             except (ipaddress.AddressValueError, ValueError):
                 pass
 
-        # try to resolve provided address
-        could_resolve = False
-        for record_type in ['A', 'AAAA']:
-            try:
-                for rdata in self._dnsResolver.query(address, record_type):
-                    yield str(rdata)
-                could_resolve = True
-            except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.Timeout, dns.resolver.NoNameservers):
-                pass
-
-        if not could_resolve:
-            # log when none could be found
-            syslog.syslog(syslog.LOG_ERR, 'unable to resolve %s for alias %s' % (address, self._name))
+        # try to resolve provided address (queue for retrieval)
+        self._dnsResolver.add(address)
 
     def _fetch_url(self, url):
         """ return unparsed (raw) alias entries without dependencies
@@ -235,19 +237,17 @@ class Alias(object):
                 else:
                     undo_content = ""
                 try:
+                    address_parser = self.get_parser()
+                    for item in self.items():
+                        if address_parser:
+                            for address in address_parser(item):
+                                self._resolve_content.add(address)
+                    # resolve hostnames (async) if there are any in the collected set
+                    self._resolve_content = self._resolve_content.union(self._dnsResolver.collect().addresses())
                     with open(self._filename_alias_content, 'w') as f_out:
-                        for item in self.items():
-                            address_parser = self.get_parser()
-                            if address_parser:
-                                for address in address_parser(item):
-                                    if address not in self._resolve_content:
-                                        # flush new alias content (without dependencies) to disk, so progress can easliy
-                                        # be followed, large lists of domain names can take quite some resolve time.
-                                        f_out.write('%s\n' % address)
-                                        f_out.flush()
-                                        # preserve addresses
-                                        self._resolve_content.add(address)
-                except IOError:
+                        f_out.write('\n'.join(self._resolve_content))
+                except (IOError, DNSException) as e:
+                    syslog.syslog(syslog.LOG_ERR, 'alias resolve error %s (%s)' % (self._name, e))
                     # parse issue, keep data as-is, flush previous content to disk
                     with open(self._filename_alias_content, 'w') as f_out:
                         f_out.write(undo_content)
@@ -269,6 +269,8 @@ class Alias(object):
             return self._fetch_url
         elif self._type == 'geoip':
             return self._fetch_geo
+        elif self._type == 'dynipv6host':
+            return InterfaceParser(self._interface).iter_dynipv6host
         elif self._type == 'mac':
             return ArpCache().iter_addresses
         else:

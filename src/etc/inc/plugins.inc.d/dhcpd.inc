@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2014-2020 Franco Fichtner <franco@opnsense.org>
+ * Copyright (C) 2014-2022 Franco Fichtner <franco@opnsense.org>
  * Copyright (C) 2010 Ermal Luçi
  * Copyright (C) 2005-2006 Colin Smith <ethethlay@gmail.com>
  * Copyright (C) 2003-2004 Manuel Kasper <mk@neon1.net>
@@ -235,11 +235,10 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
             continue;
         }
 
-        /*
-         * Check if we need to listen on a CARP interface.  A CARP setup will try
-         * to leave the clients configured: RemoveRoute off / DeprecatePrefix off
-         */
-        $ifcfgipv6 = get_interface_ipv6(!empty($dhcpv6ifconf['rainterface']) && $dhcpv6ifconf['rainterface'] != 'static' ? $dhcpv6ifconf['rainterface'] : $dhcpv6if);
+        $carp_mode = false;
+        $src_addr = false;
+
+        $ifcfgipv6 = get_interface_ipv6(!empty($dhcpv6ifconf['rainterface']) ? $dhcpv6ifconf['rainterface'] : $dhcpv6if);
         if (!is_ipaddrv6($ifcfgipv6) && !isset($config['interfaces'][$dhcpv6if]['dhcpd6track6allowoverride'])) {
             continue;
         }
@@ -308,18 +307,44 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
             $radvdconf .= "\tAdvDefaultLifetime 0;\n";
         }
 
-        $stanzas = array();
+        $stanzas = [];
 
-        list ($ifcfgipv6, $networkv6) = interfaces_primary_address6($dhcpv6if, $realif, $ifconfig_details);
+        list (, $networkv6) = interfaces_primary_address6($dhcpv6if, $ifconfig_details);
         if (is_subnetv6($networkv6)) {
             $stanzas[] = $networkv6;
         }
 
         foreach (config_read_array('virtualip', 'vip') as $vip) {
-            if ($vip['interface'] == $dhcpv6if && is_ipaddrv6($vip['subnet'])) {
-                $subnetv6 = gen_subnetv6($vip['subnet'], $vip['subnet_bits']);
-                $stanzas[] = "{$subnetv6}/{$vip['subnet_bits']}";
+            if ($vip['interface'] != $dhcpv6if || !is_ipaddrv6($vip['subnet'])) {
+                continue;
             }
+
+            if (is_linklocal($vip['subnet'])) {
+                if ($ifcfgipv6 == $vip['subnet']) {
+                    $carp_mode = !empty($vip['vhid']);
+                    $src_addr = true;
+                }
+                continue;
+            }
+
+            if (!empty($vip['nobind'])) {
+                continue;
+            }
+
+            $subnetv6 = gen_subnetv6($vip['subnet'], $vip['subnet_bits']);
+            $stanzas[] = "{$subnetv6}/{$vip['subnet_bits']}";
+        }
+
+        if ($src_addr) {
+            /* inject configured link-local address into the RA message */
+            $radvdconf .= "\tAdvRASrcAddress {\n";
+            $radvdconf .= "\t\t{$ifcfgipv6};\n";
+            $radvdconf .= "\t};\n";
+        }
+
+        if ($carp_mode) {
+            /* to avoid wrong MAC being stuck during failover */
+            $radvdconf .= "\tAdvSourceLLAddress off;\n";
         }
 
         /* VIPs may duplicate readings from system */
@@ -327,7 +352,7 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
 
         foreach ($stanzas as $stanza) {
             $radvdconf .= "\tprefix {$stanza} {\n";
-            $radvdconf .= "\t\tDeprecatePrefix " . (!empty($dhcpv6ifconf['rainterface']) ? "off" : "on") . ";\n";
+            $radvdconf .= "\t\tDeprecatePrefix " . (!empty($dhcpv6ifconf['AdvDeprecatePrefix']) ? $dhcpv6ifconf['AdvDeprecatePrefix'] : ($carp_mode ? 'off' : 'on')) . ";\n";
             switch ($dhcpv6ifconf['ramode']) {
                 case 'managed':
                     $radvdconf .= "\t\tAdvOnLink on;\n";
@@ -355,18 +380,10 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
             $radvdconf .= "\t};\n";
         }
 
-        if (!empty($dhcpv6ifconf['rainterface'])) {
-            $radvdconf .= "\troute ::/0 {\n";
-            $radvdconf .= "\t\tRemoveRoute off;\n";
-            $radvdconf .= "\t};\n";
-        }
-
         if (!empty($dhcpv6ifconf['raroutes'])) {
             foreach (explode(',', $dhcpv6ifconf['raroutes']) as $raroute) {
                 $radvdconf .= "\troute {$raroute} {\n";
-                if (!empty($dhcpv6ifconf['rainterface'])) {
-                    $radvdconf .= "\t\tRemoveRoute off;\n";
-                }
+                $radvdconf .= "\t\tRemoveRoute " . (!empty($dhcpv6ifconf['AdvRemoveRoute']) ? $dhcpv6ifconf['AdvRemoveRoute'] : ($carp_mode ? 'off' : 'on')) . ";\n";
                 if (!empty($dhcpv6ifconf['AdvRouteLifetime'])) {
                     $radvdconf .= "\t\tAdvRouteLifetime {$dhcpv6ifconf['AdvRouteLifetime']};\n";
                 }
@@ -374,8 +391,8 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
             }
         }
 
-        /* add DNS servers */
-        $dnslist_tmp = array();
+        $dnslist_tmp = [];
+
         if (isset($dhcpv6ifconf['rasamednsasdhcp6']) && !empty($dhcpv6ifconf['dnsserver'][0])) {
             $dnslist_tmp = $dhcpv6ifconf['dnsserver'];
         } elseif (!isset($dhcpv6ifconf['rasamednsasdhcp6']) && !empty($dhcpv6ifconf['radnsserver'][0])) {
@@ -389,11 +406,17 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
         } elseif (!empty($config['system']['dnsserver'][0])) {
             $dnslist_tmp = $config['system']['dnsserver'];
         }
-        $dnslist = array();
+
+        $dnslist = [];
+
         foreach ($dnslist_tmp as $server) {
             if (is_ipaddrv6($server)) {
                 $dnslist[] = $server;
             }
+        }
+
+        if (isset($dhcpv6ifconf['radisablerdnss'])) {
+            $dnslist = [];
         }
 
         if (count($dnslist) > 0) {
@@ -462,7 +485,7 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
 
         $dnslist = array();
 
-        list ($ifcfgipv6, $networkv6) = interfaces_primary_address6($if, $realif, $ifconfig_details);
+        list ($ifcfgipv6, $networkv6) = interfaces_primary_address6($if, $ifconfig_details);
 
         if ($autotype == 'slaac') {
             /* XXX this may be incorrect and needs an override or revisit */
@@ -497,9 +520,8 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
             if ($autotype == 'slaac') {
                 /* XXX also of interest in the future, see hardcoded prefix above */
                 $radvdconf .= "\t\tBase6Interface $realtrackif;\n";
-                $radvdconf .= "\t\tDeprecatePrefix on;\n";
             }
-            /* XXX DeprecatePrefix on crashes radvd on 12.1 */
+            $radvdconf .= "\t\tDeprecatePrefix on;\n";
             $radvdconf .= "\t\tAdvOnLink on;\n";
             $radvdconf .= "\t\tAdvAutonomous on;\n";
             $radvdconf .= "\t};\n";
@@ -507,6 +529,10 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
 
         foreach (config_read_array('virtualip', 'vip') as $vip) {
             if ($vip['interface'] != $if || !is_ipaddrv6($vip['subnet'])) {
+                continue;
+            }
+
+            if (is_linklocal($vip['subnet']) || !empty($vip['nobind'])) {
                 continue;
             }
 
@@ -542,16 +568,6 @@ function dhcpd_radvd_configure($verbose = false, $blacklist = array())
     if ($verbose) {
         echo "done.\n";
     }
-}
-
-function dhcpd_dhcpv4_leasesfile()
-{
-    return '/var/dhcpd/var/db/dhcpd.leases';
-}
-
-function dhcpd_dhcpv6_leasesfile()
-{
-    return '/var/dhcpd/var/db/dhcpd6.leases';
 }
 
 function dhcpd_dhcp_configure($verbose = false, $family = 'all', $blacklist = array())
@@ -714,15 +730,15 @@ EOPP;
             continue;
         }
 
-        list ($ifcfgip, $ifcfgsn) = explode('/', find_interface_network(get_real_interface($dhcpif), false, $ifconfig_details));
+        list ($ifcfgip, $ifcfgnet) = interfaces_primary_address($dhcpif, $ifconfig_details);
 
-        $subnet = gen_subnet($ifcfgip, $ifcfgsn);
-        $subnetmask = gen_subnet_mask($ifcfgsn);
-
-        if (!is_ipaddrv4($ifcfgip) || !is_subnetv4("{$subnet}/{$ifcfgsn}")) {
+        if (!is_ipaddrv4($ifcfgip) || !is_subnetv4($ifcfgnet)) {
             log_error("Warning! dhcpd_dhcp4_configure() found no suitable IPv4 address on {$dhcpif}");
             continue;
         }
+
+        list ($subnet, $ifcfgsn) = explode('/', $ifcfgnet);
+        $subnetmask = gen_subnet_mask($ifcfgsn);
 
         $all_pools = array();
         $all_pools[] = $dhcpifconf;
@@ -839,6 +855,10 @@ EOPP;
 
             if (isset($poolconf['denyunknown'])) {
                 $dhcpdconf .= "    deny unknown-clients;\n";
+            }
+
+            if (isset($poolconf['ignoreuids'])) {
+                $dhcpdconf .= "    ignore-client-uids true;\n";
             }
 
             if (
@@ -990,6 +1010,12 @@ EOD;
         if (!empty($dhcpifconf['maxleasetime'])) {
             $dhcpdconf .= "  max-lease-time {$dhcpifconf['maxleasetime']};\n";
         }
+
+        // min-secs
+        if (!empty($dhcpifconf['minsecs'])) {
+            $dhcpdconf .= "  min-secs {$dhcpifconf['minsecs']};\n";
+        }
+
         // interface MTU
         if (!empty($dhcpifconf['interface_mtu'])) {
             $dhcpdconf .= "  option interface-mtu {$dhcpifconf['interface_mtu']};\n";
@@ -1050,19 +1076,39 @@ EOD;
             if (!empty($dhcpifconf['nextserver'])) {
                 $dhcpdconf .= "  next-server {$dhcpifconf['nextserver']};\n";
             }
-            if (!empty($dhcpifconf['filename']) && !empty($dhcpifconf['filename32']) && !empty($dhcpifconf['filename64'])) {
-                $dhcpdconf .= "  if option arch = 00:06 {\n";
-                $dhcpdconf .= "    filename \"{$dhcpifconf['filename32']}\";\n";
-                $dhcpdconf .= "  } else if option arch = 00:07 {\n";
-                $dhcpdconf .= "    filename \"{$dhcpifconf['filename64']}\";\n";
-                $dhcpdconf .= "  } else if option arch = 00:09 {\n";
-                $dhcpdconf .= "    filename \"{$dhcpifconf['filename64']}\";\n";
-                $dhcpdconf .= "  } else {\n";
-                $dhcpdconf .= "    filename \"{$dhcpifconf['filename']}\";\n";
-                $dhcpdconf .= "  }\n\n";
+
+            $conditional = false;
+            $filemap = [
+                '00:06' => 'filename32',
+                '00:07' => 'filename64',
+                '00:09' => 'filename64',
+                '00:0a' => 'filename32arm',
+                '00:0b' => 'filename64arm',
+            ];
+
+            foreach ($filemap as $arch => $file) {
+                if (empty($dhcpifconf[$file])) {
+                    continue;
+                }
+
+                $dhcpdconf .= $conditional ? ' else ' : '  ';
+                $dhcpdconf .= "if option arch = {$arch} {\n";
+                $dhcpdconf .= "    filename \"{$dhcpifconf[$file]}\";\n";
+                $dhcpdconf .= "  }";
+
+                $conditional = true;
+            }
+            if ($conditional) {
+                if (!empty($dhcpifconf['filename'])) {
+                    $dhcpdconf .= "  else {\n";
+                    $dhcpdconf .= "    filename \"{$dhcpifconf['filename']}\";\n";
+                    $dhcpdconf .= "  }";
+                }
+                $dhcpdconf .= "\n";
             } elseif (!empty($dhcpifconf['filename'])) {
                 $dhcpdconf .= "  filename \"{$dhcpifconf['filename']}\";\n";
             }
+
             if (!empty($dhcpifconf['rootpath'])) {
                 $dhcpdconf .= "  option root-path \"{$dhcpifconf['rootpath']}\";\n";
             }
@@ -1093,6 +1139,7 @@ EOD;
                     $dhhostname = str_replace(" ", "_", $sm['hostname']);
                     $dhhostname = str_replace(".", "_", $dhhostname);
                     $dhcpdconf .= "  option host-name \"{$dhhostname}\";\n";
+                    $dhcpdconf .= "  set hostname-override = config-option host-name;\n";
                 }
                 if (!empty($sm['filename'])) {
                     $dhcpdconf .= "  filename \"{$sm['filename']}\";\n";
@@ -1102,7 +1149,7 @@ EOD;
                     $dhcpdconf .= "  option root-path \"{$sm['rootpath']}\";\n";
                 }
 
-                if (!empty($sm['gateway']) && ($sm['gateway'] != $dhcpifconf['gateway'])) {
+                if (!empty($sm['gateway']) && $sm['gateway'] != "none" && ($sm['gateway'] != $dhcpifconf['gateway'])) {
                     $dhcpdconf .= "  option routers {$sm['gateway']};\n";
                 }
 
@@ -1278,7 +1325,7 @@ function dhcpd_dhcp6_configure($verbose = false, $blacklist = array())
             continue;
         }
         if (!empty($config['interfaces'][$ifname]['track6-interface'])) {
-            list ($ifcfgipv6) = interfaces_primary_address6($ifname, null, $ifconfig_details);
+            list ($ifcfgipv6) = interfaces_primary_address6($ifname, $ifconfig_details);
             if (!is_ipaddrv6($ifcfgipv6)) {
                 continue;
             }
@@ -1432,7 +1479,7 @@ EOD;
             continue;
         }
 
-        list ($ifcfgipv6, $networkv6) = interfaces_primary_address6($dhcpv6if, null, $ifconfig_details);
+        list ($ifcfgipv6, $networkv6) = interfaces_primary_address6($dhcpv6if, $ifconfig_details);
         if (!is_ipaddrv6($ifcfgipv6) || !is_subnetv6($networkv6)) {
             log_error("Warning! dhcpd_dhcp6_configure() found no suitable IPv6 address on {$dhcpv6if}");
             continue;
@@ -1501,6 +1548,11 @@ EOD;
             $dhcpdv6conf .= "  max-lease-time {$dhcpv6ifconf['maxleasetime']};\n";
         }
 
+        // min-secs
+        if (!empty($dhcpv6ifconf['minsecs'])) {
+            $dhcpdv6conf .= "  min-secs {$dhcpv6ifconf['minsecs']};\n";
+        }
+
         // ntp-servers
         if (isset($dhcpv6ifconf['ntpserver'][0])) {
             $ntpservers = array();
@@ -1518,7 +1570,11 @@ EOD;
         if (isset($dhcpv6ifconf['numberoptions']['item'])) {
             $dhcpdv6conf .= "\n";
             foreach ($dhcpv6ifconf['numberoptions']['item'] as $itemv6idx => $itemv6) {
-                $dhcpdv6conf .= "  option custom-{$dhcpv6if}-{$itemv6idx} \"{$itemv6['value']}\";\n";
+                if (empty($itemv6['type']) || $itemv6['type'] == "text") {
+                    $dhcpdv6conf .= "  option custom-{$dhcpv6if}-{$itemv6idx} \"{$itemv6['value']}\";\n";
+                } else {
+                    $dhcpdv6conf .= "  option custom-{$dhcpv6if}-{$itemv6idx} {$itemv6['value']};\n";
+                }
             }
         }
 
@@ -1553,6 +1609,7 @@ EOD;
                     $dhhostname = str_replace(" ", "_", $sm['hostname']);
                     $dhhostname = str_replace(".", "_", $dhhostname);
                     $dhcpdv6conf .= "  option host-name {$dhhostname};\n";
+                    $dhcpdv6conf .= "  set hostname-override = config-option host-name;\n";
                 }
                 if (!empty($sm['filename'])) {
                     $dhcpdv6conf .= "  filename \"{$sm['filename']}\";\n";
@@ -1585,7 +1642,7 @@ EOD;
         } else {
             $realif = get_real_interface($dhcpv6if, "inet6");
             if (stristr("$realif", "bridge")) {
-                $mac = get_interface_mac($realif);
+                $mac = get_interface_mac($realif, $ifconfig_details);
                 $v6address = dhcpd_generate_ipv6_from_mac($mac);
                 /* create link local address for bridges */
                 mwexec("/sbin/ifconfig {$realif} inet6 {$v6address}");
@@ -1675,16 +1732,16 @@ function dhcpd_dhcrelay4_configure($verbose = false)
 
         /* XXX runs multiple times because of server address loop :( */
         foreach (array_keys($iflist) as $ifname) {
-            $realif = get_real_interface($ifname, $ifconfig_details);
-            $subnet = find_interface_network($realif, true, $ifconfig_details);
+            list (, $subnet) = interfaces_primary_address($ifname, $ifconfig_details);
             if (!is_subnetv4($subnet)) {
                 continue;
             }
             if (ip_in_subnet($srvip, $subnet)) {
-                $destif = $realif;
+                $destif = get_real_interface($ifname, $ifconfig_details);
                 break;
             }
         }
+
         if (!isset($destif)) {
             foreach (get_staticroutes() as $rtent) {
                 if (ip_in_subnet($srvip, $rtent['network'])) {
@@ -1798,13 +1855,12 @@ function dhcpd_dhcrelay6_configure($verbose = false)
 
         /* XXX runs multiple times because of server address loop :( */
         foreach (array_keys($iflist) as $ifname) {
-            $realif = get_real_interface($ifname, 'inet6');
-            $subnet = find_interface_networkv6($realif, true, $ifconfig_details);
+            list (, $subnet) = interfaces_primary_address6($ifname, $ifconfig_details);
             if (!is_subnetv6($subnet)) {
                 continue;
             }
             if (ip_in_subnet($srvip, $subnet)) {
-                $destif = $realif;
+                $destif = get_real_interface($ifname, 'inet6');
                 break;
             }
         }
@@ -1868,4 +1924,97 @@ function dhcpd_dhcrelay6_configure($verbose = false)
     if ($verbose) {
         echo "done.\n";
     }
+}
+
+function dhcpd_staticmap($domain_fallback = 'not.found', $ifconfig_details = null, $valid_addresses = true, $proto = null)
+{
+    $staticmap = [];
+    foreach (empty($proto) ? [4, 6] : [$proto] as $inet) {
+        $ipaddr = $inet == 6 ? 'ipaddrv6' : 'ipaddr';
+
+        foreach (config_read_array($inet == 6 ? 'dhcpdv6' : 'dhcpd') as $dhcpif => $dhcpifconf) {
+            if (!isset($dhcpifconf['staticmap']) || !isset($dhcpifconf['enable'])) {
+                continue;
+            }
+
+            $ifconf = config_read_array('interfaces', $dhcpif);
+            list ($ipaddrv6) = $inet == 6 && isset($ifconf['dhcpd6track6allowoverride']) ?
+                interfaces_primary_address6($dhcpif, $ifconfig_details) : [null];
+
+            foreach ($dhcpifconf['staticmap'] as $host) {
+                if (empty($host[$ipaddr]) && $valid_addresses) {
+                    /* we only return proper entries with an IP address */
+                    continue;
+                }
+
+                if (!empty($ipaddrv6) && strpos($host['ipaddrv6'], '::') === 0) {
+                    /* expand IPv6 suffix address, but only allow user-given compressed suffix */
+                    $host['ipaddrv6'] = make_ipv6_64_address($ipaddrv6, $host['ipaddrv6']);
+                }
+
+                if (!empty($host['ipaddrv6'])) {
+                    /* avoid sloppy input by recompressing the address correctly */
+                    $host['ipaddrv6'] = Net_IPv6::compress(Net_IPv6::uncompress($host['ipaddrv6']));
+                }
+
+                // XXX: dhcpdv6 domain entries have been superseded by domainsearchlist,
+                //      for backward compatibilty support both here.
+                if ($inet == 6 && !empty($host['domainsearchlist'])) {
+                    $domain = $host['domainsearchlist'];
+                } elseif (!empty($host['domain'])) {
+                    $domain = $host['domain'];
+                } elseif ($inet == 6 && !empty($dhcpifconf['domainsearchlist'])) {
+                    $domain = $dhcpifconf['domainsearchlist'];
+                } elseif (!empty($dhcpifconf['domain'])) {
+                    $domain = $dhcpifconf['domain'];
+                } else {
+                    $domain = $domain_fallback;
+                }
+
+                /* first entry only */
+                $domain = preg_split('/[ ;]+/', $domain)[0];
+
+                $entry = [
+                    'descr' => $host['descr'],
+                    'domain' => $domain,
+                    'hostname' => $host['hostname'],
+                    'interface' => $dhcpif,
+                    $ipaddr => $host[$ipaddr],
+                ];
+
+                foreach (['mac', 'duid'] as $property) {
+                    if (isset($host[$property])) {
+                        $entry[$property] = $host[$property];
+                    }
+                }
+
+                $staticmap[] = $entry;
+            }
+        }
+    }
+
+    return $staticmap;
+}
+
+function dhcpd_leases($inet = 4)
+{
+    $file = $inet == 6 ? '/var/dhcpd/var/db/dhcpd6.leases' : '/var/dhcpd/var/db/dhcpd.leases';
+    $token = $inet == 6 ? 'ia-' : 'lease';
+    $content = [];
+    $section = [];
+
+    $fin = @fopen($file, 'r');
+    if ($fin) {
+        while (($line = fgets($fin, 4096)) !== false) {
+            if (strpos($line, $token) === 0) {
+                $section = [];
+            } elseif (strpos($line, '}') === 0 && count($section) > 0) {
+                $content[] = implode('', $section);
+            }
+            $section[] = rtrim($line, "\n;");
+        }
+        fclose($fin);
+    }
+
+    return $content;
 }

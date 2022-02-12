@@ -34,163 +34,8 @@
 require_once("interfaces.inc");
 require_once("util.inc");
 
-// Will be changed to false if security checks fail
-$security_passed = true;
-
-/* If this function doesn't exist, we're being called from Captive Portal or
-   another internal subsystem which does not include authgui.inc */
-if (function_exists("display_error_form") && !isset($config['system']['webgui']['nodnsrebindcheck'])) {
-    /* DNS ReBinding attack prevention */
-    $found_host = false;
-
-    /* either an IPv6 address with or without an alternate port */
-    if (strstr($_SERVER['HTTP_HOST'], "]")) {
-        $http_host_port = explode("]", $_SERVER['HTTP_HOST']);
-        /* v6 address has more parts, drop the last part */
-        if (count($http_host_port) > 1) {
-            array_pop($http_host_port);
-            $http_host = str_replace(array("[", "]"), "", implode(":", $http_host_port));
-        } else {
-            $http_host = str_replace(array("[", "]"), "", implode(":", $http_host_port));
-        }
-    } else {
-        $http_host = explode(":", $_SERVER['HTTP_HOST']);
-        $http_host = $http_host[0];
-    }
-    if (
-        is_ipaddr($http_host) || $_SERVER['SERVER_ADDR'] == "127.0.0.1" ||
-        strcasecmp($http_host, "localhost") == 0 or $_SERVER['SERVER_ADDR'] == "::1"
-    ) {
-        $found_host = true;
-    }
-    if (
-        strcasecmp($http_host, $config['system']['hostname'] . "." . $config['system']['domain']) == 0 ||
-        strcasecmp($http_host, $config['system']['hostname']) == 0
-    ) {
-        $found_host = true;
-    }
-
-    if (isset($config['dyndnses']['dyndns']) && !$found_host) {
-        foreach ($config['dyndnses']['dyndns'] as $dyndns) {
-            if (strcasecmp($dyndns['host'], $http_host) == 0) {
-                $found_host = true;
-                break;
-            }
-        }
-    }
-
-    if (isset($config['dnsupdates']['dnsupdate']) && !$found_host) {
-        foreach ($config['dnsupdates']['dnsupdate'] as $rfc2136) {
-            if (strcasecmp($rfc2136['host'], $http_host) == 0) {
-                $found_host = true;
-                break;
-            }
-        }
-    }
-
-    if (!empty($config['system']['webgui']['althostnames']) && !$found_host) {
-        $althosts = explode(" ", $config['system']['webgui']['althostnames']);
-        foreach ($althosts as $ah) {
-            if (strcasecmp($ah, $http_host) == 0 or strcasecmp($ah, $_SERVER['SERVER_ADDR']) == 0) {
-                $found_host = true;
-                break;
-            }
-        }
-    }
-
-    if ($found_host == false) {
-        if (!security_checks_disabled()) {
-            display_error_form("501", sprintf(gettext("A potential %sDNS Rebind attack%s has been detected.%sTry to access the router by IP address instead of by hostname."), '<a href="http://en.wikipedia.org/wiki/DNS_rebinding">', '</a>', '<br />'));
-            exit;
-        }
-        $security_passed = false;
-    }
-}
-
-// If the HTTP_REFERER is something other than ourselves then disallow.
-if (function_exists("display_error_form") && !isset($config['system']['webgui']['nohttpreferercheck'])) {
-    if (isset($_SERVER['HTTP_REFERER'])) {
-        if (file_exists('/tmp/setupwizard_lastreferrer')) {
-            if ($_SERVER['HTTP_REFERER'] == file_get_contents('/tmp/setupwizard_lastreferrer')) {
-                unlink('/tmp/setupwizard_lastreferrer');
-                header("Refresh: 1; url=index.php");
-                echo "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\"\n        \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">";
-                echo "<html><head><title>" . gettext("Redirecting...") . "</title></head><body>" . gettext("Redirecting to the dashboard...") . "</body></html>";
-                exit;
-            }
-        }
-        $found_host = false;
-        $referrer_host = parse_url($_SERVER['HTTP_REFERER'], PHP_URL_HOST);
-        $referrer_host = str_replace(array("[", "]"), "", $referrer_host);
-        if ($referrer_host) {
-            if (
-                strcasecmp($referrer_host, $config['system']['hostname'] . "." . $config['system']['domain']) == 0 ||
-                strcasecmp($referrer_host, $config['system']['hostname']) == 0
-            ) {
-                $found_host = true;
-            }
-
-
-            if (!empty($config['system']['webgui']['althostnames']) && !$found_host) {
-                $althosts = explode(" ", $config['system']['webgui']['althostnames']);
-                foreach ($althosts as $ah) {
-                    if (strcasecmp($referrer_host, $ah) == 0) {
-                        $found_host = true;
-                        break;
-                    }
-                }
-            }
-
-            if (isset($config['dyndnses']['dyndns']) && !$found_host) {
-                foreach ($config['dyndnses']['dyndns'] as $dyndns) {
-                    if (strcasecmp($dyndns['host'], $referrer_host) == 0) {
-                        $found_host = true;
-                        break;
-                    }
-                }
-            }
-
-            if (isset($config['dnsupdates']['dnsupdate']) && !$found_host) {
-                foreach ($config['dnsupdates']['dnsupdate'] as $rfc2136) {
-                    if (strcasecmp($rfc2136['host'], $referrer_host) == 0) {
-                        $found_host = true;
-                        break;
-                    }
-                }
-            }
-
-            if (!$found_host) {
-                $found_host = isAuthLocalIP($referrer_host);
-                if ($referrer_host == "127.0.0.1" || $referrer_host == "localhost") {
-                    // allow SSH port forwarded connections and links from localhost
-                    $found_host = true;
-                }
-            }
-        }
-        if ($found_host == false) {
-            if (!security_checks_disabled()) {
-                display_error_form('501', sprintf(
-                    gettext('The HTTP_REFERER "%s" does not match the predefined settings. You can disable this check if needed under System: Settings: Administration.'),
-                    html_safe($_SERVER['HTTP_REFERER'])
-                ));
-                exit;
-            }
-            $security_passed = false;
-        }
-    } else {
-        $security_passed = false;
-    }
-}
-
-if (function_exists("display_error_form") && $security_passed) {
-    /* Security checks passed, so it should be OK to turn them back on */
-    restore_security_checks();
-}
-unset($security_passed);
-
 $groupindex = index_groups();
 $userindex = index_users();
-
 
 /**
  * check if $http_host is a local configured ip address
@@ -402,35 +247,50 @@ function local_sync_accounts()
 {
     global $config;
 
-    /* remove local users to avoid uid conflicts */
-    $fd = popen('/usr/sbin/pw usershow -a', 'r');
-    if ($fd) {
-        while (!feof($fd)) {
-            $line = explode(':', fgets($fd));
-            if (count($line) < 3 ||  !strncmp($line[0], '_', 1) || $line[2] < 2000 || $line[2] > 65000) {
-                continue;
+    /* we need to know the current state of users and groups, both configured and actual */
+    $current_data = [];
+    foreach (['usershow', 'groupshow'] as $command) {
+        $section = $command == 'usershow' ? 'user' : 'group';
+        $current_data[$section] = [];
+        $data = "";
+        exec("/usr/sbin/pw {$command} -a", $data, $ret);
+        if (!$ret) {
+            foreach ($data as $record) {
+                $line = explode(':', $record);
+                // filter system managed users and groups
+                if (count($line) < 3 ||  !strncmp($line[0], '_', 1) || ($line[2] < 2000 && $line[0] != 'root') || $line[2] > 65000) {
+                    continue;
+                }
+                $current_data[$section][$line[2]] = $line;
             }
-            /*
-             * If a crontab was created to user, pw userdel will be interactive and
-             * can cause issues. Just remove crontab before run it when necessary
-             */
-            @unlink("/var/cron/tabs/{$line[0]}");
-            mwexecf('/usr/sbin/pw userdel -n %s', $line[0]);
         }
-        pclose($fd);
     }
-
-    /* remove local groups to avoid gid conflicts */
-    $fd = popen('/usr/sbin/pw groupshow -a', 'r');
-    if ($fd) {
-        while (!feof($fd)) {
-            $line = explode(':', fgets($fd));
-            if (count($line) < 3 || !strncmp($line[0], '_', 1) || $line[2] < 2000 || $line[2] > 65000) {
-                continue;
+    $config_map = [];
+    foreach (['user', 'group'] as $section) {
+        $config_map[$section] = [];
+        if (is_array($config['system'][$section])) {
+            foreach ($config['system'][$section] as $item) {
+                $this_id = $section == 'user' ? $item['uid'] : $item['gid'];
+                $config_map[$section][(string)$this_id] = $item['name'];
             }
-            mwexecf('/usr/sbin/pw groupdel -g %s', $line[2]);
         }
-        pclose($fd);
+    }
+    /* remove conflicting users and groups (uid/gid or name mismatch) */
+    foreach ($current_data as $section => $data) {
+        foreach ($data as $oid => $object) {
+            if (empty($config_map[$section][$oid]) || $config_map[$section][$oid] !== $object[0]) {
+                if ($section == 'user') {
+                    /*
+                     * If a crontab was created to user, pw userdel will be interactive and
+                     * can cause issues. Just remove crontab before run it when necessary
+                     */
+                    @unlink("/var/cron/tabs/{$object[0]}");
+                    mwexecf('/usr/sbin/pw userdel -n %s', $object[0]);
+                } else {
+                    mwexecf('/usr/sbin/pw groupdel -g %s', $object[2]);
+                }
+            }
+        }
     }
 
     /* make sure the all group exists */
@@ -440,7 +300,8 @@ function local_sync_accounts()
     /* sync all local users */
     if (is_array($config['system']['user'])) {
         foreach ($config['system']['user'] as $user) {
-            local_user_set($user);
+            $userattrs = !empty($current_data['user'][$user['uid']]) ? $current_data['user'][$user['uid']] : [];
+            local_user_set($user, false, $userattrs);
         }
     }
 
@@ -452,7 +313,7 @@ function local_sync_accounts()
     }
 }
 
-function local_user_set(&$user, $force_password = false)
+function local_user_set(&$user, $force_password = false, $userattrs = null)
 {
     global $config;
 
@@ -469,6 +330,7 @@ function local_user_set(&$user, $force_password = false)
     $user_pass = $user['password'];
     $user_name = $user['name'];
     $user_uid = $user['uid'];
+    $comment = str_replace(array(':', '!', '@'), ' ', $user['descr']);
 
     $lock_account = 'lock';
 
@@ -508,33 +370,49 @@ function local_user_set(&$user, $force_password = false)
     if (userIsAdmin($user['name'])) {
         $user_group = 'wheel';
     }
+    // XXX: primary group id can only be wheel or nobody, otherwise we should map the correct numbers for comparison
+    $user_gid = $user_group == 'wheel' ? 0 : 65534;
 
     /* passwords only when integrated auth is disabled or forced */
     if (!$force_password && empty($config['system']['disableintegratedauth'])) {
         $user_pass = '*';
     }
 
-    /* read from pw db */
-    $fd = popen("/usr/sbin/pw usershow -n {$user_name} 2>&1", "r");
-    $pwread = fgets($fd);
-    pclose($fd);
-    $userattrs = explode(":", trim($pwread));
+    /* read from pw db if not provided (batch mode) */
+    if ($userattrs === null) {
+        $fd = popen("/usr/sbin/pw usershow -n {$user_name} 2>&1", "r");
+        $pwread = fgets($fd);
+        pclose($fd);
+        $userattrs = explode(":", trim($pwread));
+    }
 
     /* determine add or mod */
-    if (($userattrs[0] != $user['name']) || (!strncmp($pwread, 'pw:', 3))) {
+    if (empty($userattrs) || $userattrs[0] != $user['name'] || !strncmp($pwread, 'pw:', 3)) {
         $user_op = 'useradd -m -k /usr/share/skel -o';
+    } elseif (
+        $userattrs[0] == $user_name &&
+        /* XXX $user_pass comparison? */
+        $userattrs[2] == $user_uid &&
+        $userattrs[3] == $user_gid &&
+        $userattrs[7] == $comment &&
+        $userattrs[8] == $user_home &&
+        $userattrs[9] == $user_shell
+    ) {
+        // XXX: unchanged
+        $user_op = null;
     } else {
         $user_op = 'usermod';
     }
 
-    $comment = str_replace(array(':', '!', '@'), ' ', $user['descr']);
     /* add or mod pw db */
-    $cmd = "/usr/sbin/pw {$user_op} -q -u {$user_uid} -n {$user_name}" .
-      " -g {$user_group} -s {$user_shell} -d {$user_home}" .
-      " -c " . escapeshellarg($comment) . " -H 0 2>&1";
-    $fd = popen($cmd, 'w');
-    fwrite($fd, $user_pass);
-    pclose($fd);
+    if ($user_op != null) {
+        $cmd = "/usr/sbin/pw {$user_op} -q -u {$user_uid} -n {$user_name}" .
+          " -g {$user_group} -s {$user_shell} -d {$user_home}" .
+          " -c " . escapeshellarg($comment) . " -H 0 2>&1";
+        $fd = popen($cmd, 'w');
+        fwrite($fd, $user_pass);
+        pclose($fd);
+    }
 
     /* create user directory if required */
     @mkdir($user_home, 0700);
@@ -725,7 +603,7 @@ function auth_get_authserver($name)
         );
     }
 
-    if (isset($config['system']['authserver']) && is_array($config['system']['authserver'])) {
+    if (!empty($config['system']['authserver'])) {
         foreach ($config['system']['authserver'] as $authcfg) {
             if ($authcfg['name'] == $name) {
                 if ($authcfg['type'] == 'ldap' || $authcfg['type'] == 'ldap-totp') {
@@ -751,7 +629,7 @@ function auth_get_authserver_list()
 
     $list = array();
 
-    if (isset($config['system']['authserver']) && is_array($config['system']['authserver'])) {
+    if (!empty($config['system']['authserver'])) {
         foreach ($config['system']['authserver'] as $authcfg) {
             /* Add support for disabled entries? */
             $list[$authcfg['name']] = $authcfg;
@@ -781,15 +659,4 @@ function get_authenticator($authcfg = null)
 
     $authFactory = new OPNsense\Auth\AuthenticationFactory();
     return $authFactory->get($authName);
-}
-
-function authenticate_user($username, $password, $authcfg = null)
-{
-    $authenticator = get_authenticator($authcfg);
-    if ($authenticator != null) {
-        return $authenticator->authenticate($username, $password);
-    } else {
-        log_error('Unable to retrieve authenticator for ' . $username);
-        return false;
-    }
 }

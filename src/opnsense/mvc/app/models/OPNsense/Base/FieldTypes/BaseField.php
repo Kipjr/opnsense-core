@@ -299,6 +299,17 @@ abstract class BaseField
     }
 
     /**
+     * Triggered by calling isset() or empty() on an internal child node.
+     * Prevents the need for statically casting to a type on __get().
+     * @param $name property name
+     * @return bool
+     */
+    public function __isset($name)
+    {
+        return isset($this->internalChildnodes[$name]);
+    }
+
+    /**
      * iterate (non virtual) child nodes
      * @return Generator
      */
@@ -366,7 +377,7 @@ abstract class BaseField
      */
     public function isFieldChanged()
     {
-        return $this->internalInitialValue !==  $this->internalValue;
+        return $this->internalInitialValue !== $this->internalValue;
     }
 
     /**
@@ -376,7 +387,11 @@ abstract class BaseField
      */
     public function setAttributeValue($key, $value)
     {
-        $this->internalAttributes[$key] = $value;
+        if ($value !== null) {
+            $this->internalAttributes[$key] = $value;
+        } elseif (isset($this->internalAttributes[$key])) {
+            unset($this->internalAttributes[$key]);
+        }
     }
 
     /**
@@ -585,7 +600,7 @@ abstract class BaseField
      */
     public function getNodeData()
     {
-        return $this->__toString();
+        return (string)$this;
     }
 
 

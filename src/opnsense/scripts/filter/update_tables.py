@@ -137,13 +137,8 @@ if __name__ == '__main__':
                     alias_changed_or_expired = max(alias_changed_or_expired, rel_alias.changed(), rel_alias.expired())
                     alias_content += rel_alias.resolve()
         # when the alias or any of it's dependencies has changed, generate new
-        if alias_changed_or_expired:
-            alias_content_txt = '\n'.join(sorted(alias_content))
-            open('/var/db/aliastables/%s.txt' % alias_name, 'w').write(alias_content_txt)
-        elif os.path.isfile('/var/db/aliastables/%s.txt' % alias_name):
-            alias_content_txt = open('/var/db/aliastables/%s.txt' % alias_name, 'r').read()
-        else:
-            alias_content_txt = ""
+        if alias_changed_or_expired or not os.path.isfile('/var/db/aliastables/%s.txt' % alias_name):
+            open('/var/db/aliastables/%s.txt' % alias_name, 'w').write('\n'.join(sorted(alias_content)))
 
         alias_pf_content = list()
         sp = subprocess.run(['/sbin/pfctl', '-t', alias_name, '-T', 'show'], capture_output=True, text=True)
@@ -151,7 +146,6 @@ if __name__ == '__main__':
             line = line.strip()
             if line:
                 alias_pf_content.append(line)
-
         if (len(alias_content) != len(alias_pf_content) or alias_changed_or_expired) and alias.get_parser():
             # if the alias is changed, expired or the one in memory has a different number of items, load table
             # (but only if we know how to handle this alias type)
@@ -165,11 +159,19 @@ if __name__ == '__main__':
 
                 error_output = sp.stderr.strip()
                 if error_output.find('pfctl: ') > -1:
+                    error_message = "Error loading alias [%s]: %s {current_size: %d, new_size: %d}" % (
+                        alias_name,
+                        error_output.replace('pfctl: ', ''),
+                        len(alias_pf_content),
+                        len(alias_content),
+                    )
                     result['status'] = 'error'
                     if 'messages' not in result:
                         result['messages'] = list()
                     if error_output not in result['messages']:
-                        result['messages'].append("%s [%s]" % (error_output.replace('pfctl: ', ''), alias_name))
+                        result['messages'].append(error_message)
+                        syslog.syslog(syslog.LOG_NOTICE, error_message)
+
     # cleanup removed aliases
     to_remove = dict()
     for filename in glob.glob('/var/db/aliastables/*.txt'):

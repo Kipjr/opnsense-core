@@ -1,4 +1,4 @@
-# Copyright (c) 2014-2020 Franco Fichtner <franco@opnsense.org>
+# Copyright (c) 2014-2021 Franco Fichtner <franco@opnsense.org>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions
@@ -28,24 +28,73 @@ all:
 
 .include "Mk/defaults.mk"
 
-CORE_ABI?=	20.7
-CORE_PHP?=	72
-CORE_PYTHON?=	37
-CORE_SYSLOGNG?=	3.29
+CORE_ABI?=	22.1
+CORE_MESSAGE?=	Carry on my wayward son
+CORE_NAME?=	opnsense-devel
+CORE_NICKNAME?=	Not Yet
+CORE_TYPE?=	development
 
-.if exists(${GIT}) && exists(${GITVERSION})
-. if ${CORE_ABI} == "20.7"
-CORE_COMMIT!=	${GITVERSION} --exclude=21.1.r\*
-. else
-CORE_COMMIT!=	${GITVERSION}
+.for REPLACEMENT in ABI PHP PYTHON
+. if empty(CORE_${REPLACEMENT})
+.  warning Cannot build without CORE_${REPLACEMENT} set
 . endif
+CORE_MAKE+=	CORE_${REPLACEMENT}=${CORE_${REPLACEMENT}}
+.endfor
+
+_CORE_NEXT=	${CORE_ABI:C/\./ /}
+.if ${_CORE_NEXT:[2]} == 7 # community
+CORE_NEXT!=	expr ${_CORE_NEXT:[1]} + 1
+CORE_NEXT:=	${CORE_NEXT}.1
+.elif ${_CORE_NEXT:[2]} == 10 # business
+CORE_NEXT!=	expr ${_CORE_NEXT:[1]} + 1
+CORE_NEXT:=	${CORE_NEXT}.4
+.elif ${_CORE_NEXT:[2]} == 1 # community
+CORE_NEXT=	${_CORE_NEXT:[1]}
+CORE_NEXT:=	${CORE_NEXT}.7
+.elif ${_CORE_NEXT:[2]} == 4 # business
+CORE_NEXT=	${_CORE_NEXT:[1]}
+CORE_NEXT:=	${CORE_NEXT}.10
 .else
-CORE_COMMIT=	unknown 0 undefined
+.error Unsupported minor version for CORE_ABI=${CORE_ABI}
 .endif
 
+.if exists(${GIT}) && exists(${GITVERSION}) && exists(${.CURDIR}/.git)
+. if ${CORE_TYPE:M[Dd][Ee][Vv]*}
+_NEXTBETA!=	${GIT} tag -l ${CORE_NEXT}.b
+.  if !empty(_NEXTBETA)
+_NEXTMATCH=	--match=${CORE_NEXT}.b
+.  else
+_NEXTALPHA!=	${GIT} tag -l ${CORE_NEXT}.a
+.   if !empty(_NEXTALPHA)
+_NEXTMATCH=	--match=${CORE_NEXT}.a
+.   else
+_NEXTDEVEL!=	${GIT} tag -l ${CORE_ABI}\*
+.    if !empty(_NEXTDEVEL)
+_NEXTMATCH=	--match=${CORE_ABI}\*
+.    endif
+.   endif
+.  endif
+. elif ${CORE_TYPE:M[Bb][Uu][Ss]*}
+_NEXTMATCH=	'' # XXX verbatim match for now
+. else
+_NEXTSTABLE!=	${GIT} tag -l ${CORE_ABI}\*
+.  if !empty(_NEXTSTABLE)
+_NEXTMATCH=	--match=${CORE_ABI}\*
+.  endif
+. endif
+. if empty(_NEXTMATCH)
+. error Did not find appropriate tag for CORE_ABI=${CORE_ABI}
+. endif
+CORE_COMMIT!=	${GITVERSION} ${_NEXTMATCH}
+.endif
+
+CORE_COMMIT?=	unknown 0 undefined
 CORE_VERSION?=	${CORE_COMMIT:[1]}
 CORE_REVISION?=	${CORE_COMMIT:[2]}
 CORE_HASH?=	${CORE_COMMIT:[3]}
+
+_CORE_SERIES=	${CORE_VERSION:S/./ /g}
+CORE_SERIES?=	${_CORE_SERIES:[1]}.${_CORE_SERIES:[2]}
 
 .if "${CORE_REVISION}" != "" && "${CORE_REVISION}" != "0"
 CORE_PKGVERSION=	${CORE_VERSION}_${CORE_REVISION}
@@ -63,11 +112,7 @@ CORE_REPOSITORY?=	${CORE_ABI}/libressl
 CORE_REPOSITORY?=	unsupported/${CORE_FLAVOUR:tl}
 .endif
 
-CORE_MESSAGE?=		Carry on my wayward son
-CORE_NAME?=		opnsense-devel
-CORE_TYPE?=		development
-
-CORE_COMMENT?=		${CORE_PRODUCT} ${CORE_TYPE} package
+CORE_COMMENT?=		${CORE_PRODUCT} ${CORE_TYPE} release
 CORE_MAINTAINER?=	project@opnsense.org
 CORE_ORIGIN?=		opnsense/${CORE_NAME}
 CORE_PACKAGESITE?=	https://pkg.opnsense.org
@@ -76,14 +121,12 @@ CORE_WWW?=		https://opnsense.org/
 
 CORE_COPYRIGHT_HOLDER?=	Deciso B.V.
 CORE_COPYRIGHT_WWW?=	https://www.deciso.com/
-CORE_COPYRIGHT_YEARS?=	2014-2020
+CORE_COPYRIGHT_YEARS?=	2014-2022
 
 CORE_DEPENDS_amd64?=	beep \
-			bsdinstaller \
-			suricata
+			suricata-devel
 
-CORE_DEPENDS?=		${CORE_DEPENDS_${CORE_ARCH}} \
-			ca_root_nss \
+CORE_DEPENDS?=		ca_root_nss \
 			choparp \
 			cpustats \
 			dhcp6c \
@@ -105,6 +148,7 @@ CORE_DEPENDS?=		${CORE_DEPENDS_${CORE_ARCH}} \
 			ntp \
 			openssh-portable \
 			openvpn \
+			opnsense-installer \
 			opnsense-lang \
 			opnsense-update \
 			pam_opnsense \
@@ -115,13 +159,12 @@ CORE_DEPENDS?=		${CORE_DEPENDS_${CORE_ARCH}} \
 			php${CORE_PHP}-filter \
 			php${CORE_PHP}-gettext \
 			php${CORE_PHP}-google-api-php-client \
-			php${CORE_PHP}-hash \
 			php${CORE_PHP}-json \
 			php${CORE_PHP}-ldap \
 			php${CORE_PHP}-openssl \
 			php${CORE_PHP}-pdo \
 			php${CORE_PHP}-pecl-radius \
-			php${CORE_PHP}-phalcon \
+			php${CORE_PHP}-phalcon4 \
 			php${CORE_PHP}-phpseclib \
 			php${CORE_PHP}-session \
 			php${CORE_PHP}-simplexml \
@@ -131,7 +174,7 @@ CORE_DEPENDS?=		${CORE_DEPENDS_${CORE_ARCH}} \
 			php${CORE_PHP}-zlib \
 			pkg \
 			py${CORE_PYTHON}-Jinja2 \
-			py${CORE_PYTHON}-dnspython \
+			py${CORE_PYTHON}-dnspython2 \
 			py${CORE_PYTHON}-netaddr \
 			py${CORE_PYTHON}-requests \
 			py${CORE_PYTHON}-sqlite3 \
@@ -142,11 +185,11 @@ CORE_DEPENDS?=		${CORE_DEPENDS_${CORE_ARCH}} \
 			squid \
 			strongswan \
 			sudo \
-			syslog-ng${CORE_SYSLOGNG:S/.//g} \
-			syslogd \
+			syslog-ng \
 			unbound \
 			wpa_supplicant \
-			zip
+			zip \
+			${CORE_DEPENDS_${CORE_ARCH}}
 
 WRKDIR?=${.CURDIR}/work
 WRKSRC?=${WRKDIR}/src
@@ -205,12 +248,6 @@ manifest:
 	done
 	@echo "}"
 
-name:
-	@echo ${CORE_NAME}
-
-depends:
-	@echo ${CORE_DEPENDS}
-
 .if ${.TARGETS:Mupgrade}
 PKG_FORMAT?=	tar
 .else
@@ -229,8 +266,8 @@ scripts:
 .endfor
 
 install:
-	@${MAKE} -C ${.CURDIR}/contrib install DESTDIR=${DESTDIR}
-	@${MAKE} -C ${.CURDIR}/src install DESTDIR=${DESTDIR} ${MAKE_REPLACE}
+	@${CORE_MAKE} -C ${.CURDIR}/contrib install DESTDIR=${DESTDIR}
+	@${CORE_MAKE} -C ${.CURDIR}/src install DESTDIR=${DESTDIR} ${MAKE_REPLACE}
 .if exists(${LOCALBASE}/opnsense/www/index.php)
 	# try to update the current system if it looks like one
 	@touch ${LOCALBASE}/opnsense/www/index.php
@@ -245,21 +282,21 @@ collect:
 	done
 
 bootstrap:
-	@${MAKE} -C ${.CURDIR}/src install-bootstrap DESTDIR=${DESTDIR} \
+	@${CORE_MAKE} -C ${.CURDIR}/src install-bootstrap DESTDIR=${DESTDIR} \
 	    NO_SAMPLE=please ${MAKE_REPLACE}
 
 plist:
-	@(${MAKE} -C ${.CURDIR}/contrib plist && \
-	    ${MAKE} -C ${.CURDIR}/src plist) | sort
+	@(${CORE_MAKE} -C ${.CURDIR}/contrib plist && \
+	    ${CORE_MAKE} -C ${.CURDIR}/src plist) | sort
 
 plist-fix:
-	@${MAKE} DESTDIR=${DESTDIR} plist > ${.CURDIR}/plist
+	@${CORE_MAKE} DESTDIR=${DESTDIR} plist > ${.CURDIR}/plist
 
 plist-check:
 	@mkdir -p ${WRKDIR}
-	@${MAKE} DESTDIR=${DESTDIR} plist > ${WRKDIR}/plist.new
+	@${CORE_MAKE} DESTDIR=${DESTDIR} plist > ${WRKDIR}/plist.new
 	@cat ${.CURDIR}/plist > ${WRKDIR}/plist.old
-	@if ! diff -uq ${WRKDIR}/plist.old ${WRKDIR}/plist.new > /dev/null ; then \
+	@if ! diff -q ${WRKDIR}/plist.old ${WRKDIR}/plist.new > /dev/null ; then \
 		diff -u ${WRKDIR}/plist.old ${WRKDIR}/plist.new || true; \
 		echo ">>> Package file lists do not match.  Please run 'make plist-fix'." >&2; \
 		rm ${WRKDIR}/plist.*; \
@@ -269,9 +306,9 @@ plist-check:
 
 metadata:
 	@mkdir -p ${DESTDIR}
-	@${MAKE} DESTDIR=${DESTDIR} scripts
-	@${MAKE} DESTDIR=${DESTDIR} manifest > ${DESTDIR}/+MANIFEST
-	@${MAKE} DESTDIR=${DESTDIR} plist > ${DESTDIR}/plist
+	@${CORE_MAKE} DESTDIR=${DESTDIR} scripts
+	@${CORE_MAKE} DESTDIR=${DESTDIR} manifest > ${DESTDIR}/+MANIFEST
+	@${CORE_MAKE} DESTDIR=${DESTDIR} plist > ${DESTDIR}/plist
 
 package-check:
 	@if [ -f ${WRKDIR}/.mount_done ]; then \
@@ -284,10 +321,10 @@ package: plist-check package-check clean-wrksrc
 	@if ! ${PKG} info ${CORE_DEPEND} > /dev/null; then ${PKG} install -yfA ${CORE_DEPEND}; fi
 .endfor
 	@echo -n ">>> Generating metadata for ${CORE_NAME}-${CORE_PKGVERSION}..."
-	@${MAKE} DESTDIR=${WRKSRC} metadata
+	@${CORE_MAKE} DESTDIR=${WRKSRC} metadata
 	@echo " done"
 	@echo -n ">>> Staging files for ${CORE_NAME}-${CORE_PKGVERSION}..."
-	@${MAKE} DESTDIR=${WRKSRC} install
+	@${CORE_MAKE} DESTDIR=${WRKSRC} install
 	@echo " done"
 	@echo ">>> Generated version info for ${CORE_NAME}-${CORE_PKGVERSION}:"
 	@cat ${WRKSRC}/usr/local/opnsense/version/core
@@ -298,6 +335,10 @@ package: plist-check package-check clean-wrksrc
 upgrade-check:
 	@if ! ${PKG} info ${CORE_NAME} > /dev/null; then \
 		echo ">>> Cannot find package.  Please run 'opnsense-update -t ${CORE_NAME}'" >&2; \
+		exit 1; \
+	fi
+	@if [ "$$(${VERSIONBIN} -v)" = "${CORE_PKGVERSION}" ]; then \
+		echo "Installed version already matches ${CORE_PKGVERSION}" >&2; \
 		exit 1; \
 	fi
 
@@ -326,14 +367,10 @@ lint-exec:
 .endif
 .endfor
 
+LINTBIN?=	${.CURDIR}/contrib/parallel-lint/parallel-lint
+
 lint-php:
-	@find ${.CURDIR}/src \
-	    ! -name "*.xml" ! -name "*.xml.sample" ! -name "*.eot" \
-	    ! -name "*.svg" ! -name "*.woff" ! -name "*.woff2" \
-	    ! -name "*.otf" ! -name "*.png" ! -name "*.js" \
-	    ! -name "*.scss" ! -name "*.py" ! -name "*.ttf" \
-	    ! -name "*.tgz" ! -name "*.xml.dist" ! -name "*.tgb" \
-	    -type f -print0 | xargs -0 -n1 php -l
+	@${LINTBIN} src
 
 lint: plist-check lint-shell lint-xml lint-exec lint-php
 
@@ -404,23 +441,32 @@ ${_TARGET}_ARG=		${${_TARGET}_ARGS:[0]}
 .endif
 .endfor
 
-diff:
+ensure-stable:
+	@if ! git show-ref --verify --quiet refs/heads/stable/${CORE_ABI}; then \
+		git update-ref refs/heads/stable/${CORE_ABI} refs/remotes/origin/stable/${CORE_ABI}; \
+		git config branch.stable/${CORE_ABI}.merge refs/heads/stable/${CORE_ABI}; \
+		git config branch.stable/${CORE_ABI}.remote origin; \
+	fi
+
+diff: ensure-stable
 	@git diff --stat -p stable/${CORE_ABI} ${.CURDIR}/${diff_ARGS:[1]}
 
-mfc: clean-mfcdir
+mfc: ensure-stable clean-mfcdir
 .for MFC in ${mfc_ARGS}
 .if exists(${MFC})
 	@cp -r ${MFC} ${MFCDIR}
 	@git checkout stable/${CORE_ABI}
-	@rm -r ${MFC}
+	@rm -rf ${MFC}
 	@mv ${MFCDIR}/$$(basename ${MFC}) ${MFC}
-	@git add .
+	@git add -f .
 	@if ! git diff --quiet HEAD; then \
 		git commit -m "${MFC}: sync with master"; \
 	fi
 .else
 	@git checkout stable/${CORE_ABI}
-	@git cherry-pick -x ${MFC}
+	@if ! git cherry-pick -x ${MFC}; then \
+		git cherry-pick --abort; \
+	fi
 .endif
 	@git checkout master
 .endfor
@@ -431,9 +477,14 @@ stable:
 master:
 	@git checkout master
 
+rebase:
+	@git checkout stable/${CORE_ABI}
+	@git rebase -i
+	@git checkout master
+
 test: want-phpunit7-php${CORE_PHP}
-	@if [ "$$(${PKG} query %n-%v ${CORE_NAME})" != "${CORE_NAME}-${CORE_PKGVERSION}" ]; then \
-		echo "Installed version does not match, expected ${CORE_NAME}-${CORE_PKGVERSION}"; \
+	@if [ "$$(${VERSIONBIN} -v)" != "${CORE_PKGVERSION}" ]; then \
+		echo "Installed version does not match, expected ${CORE_PKGVERSION}"; \
 		exit 1; \
 	fi
 	@cd ${.CURDIR}/src/opnsense/mvc/tests && \

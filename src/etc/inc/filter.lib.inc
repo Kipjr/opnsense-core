@@ -195,7 +195,7 @@ function filter_core_get_default_nat_outbound_networks()
     }
     // Add ipsec network pool if specified
     if (!empty($config['ipsec']['client']['pool_address']) && !empty($config['ipsec']['client']['pool_netbits'])) {
-        $tonathosts[] = "{$config['ipsec']['client']['pool_address']}/{$config['ipsec']['client']['pool_netbits']}";
+        $result[] = "{$config['ipsec']['client']['pool_address']}/{$config['ipsec']['client']['pool_netbits']}";
     }
 
     return $result;
@@ -211,7 +211,7 @@ function filter_core_rules_system($fw, $defaults)
     // block All IPv6 except loopback traffic
     $fw->registerFilterRule(
         1,
-        array('interface' => 'loopback', 'ipprotocol' => 'inet6', 'disabled' => isset($config['system']['ipv6allow']),
+        array('interface' => 'lo0', 'ipprotocol' => 'inet6', 'disabled' => isset($config['system']['ipv6allow']),
           'descr' => 'Pass all loopback IPv6', '#ref' => 'system_advanced_firewall.php#ipv6allow'),
         $defaults['pass']
     );
@@ -233,35 +233,35 @@ function filter_core_rules_system($fw, $defaults)
     $fw->registerFilterRule(
         1,
         array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '1,2,135,136',
-            'statetype' => 'keep', 'descr' => 'IPv6 requirements (ICMP)'),
+            'statetype' => 'keep', 'descr' => 'IPv6 RFC4890 requirements (ICMP)'),
         $defaults['pass']
     );
     // Allow only bare essential icmpv6 packets
     $fw->registerFilterRule(
         1,
-        array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '129,133,134,135,136',
-            'statetype' => 'keep', 'descr' => 'IPv6 requirements (ICMP)', 'from' => '(self)',
+        array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '128,129,133,134,135,136',
+            'statetype' => 'keep', 'descr' => 'IPv6 RFC4890 requirements (ICMP)', 'from' => '(self)',
             'to' => 'fe80::/10,ff02::/16', 'direction' => 'out' ),
         $defaults['pass']
     );
     $fw->registerFilterRule(
         1,
         array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '128,133,134,135,136',
-            'statetype' => 'keep', 'descr' => 'IPv6 requirements (ICMP)', 'from' => 'fe80::/10',
+            'statetype' => 'keep', 'descr' => 'IPv6 RFC4890 requirements (ICMP)', 'from' => 'fe80::/10',
             'to' => 'fe80::/10,ff02::/16', 'direction' => 'in' ),
         $defaults['pass']
     );
     $fw->registerFilterRule(
         1,
         array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '128,133,134,135,136',
-            'statetype' => 'keep', 'descr' => 'IPv6 requirements (ICMP)', 'from' => 'ff02::/16',
+            'statetype' => 'keep', 'descr' => 'IPv6 RFC4890 requirements (ICMP)', 'from' => 'ff02::/16',
             'to' => 'fe80::/10', 'direction' => 'in' ),
         $defaults['pass']
     );
     $fw->registerFilterRule(
         1,
         array('ipprotocol' => 'inet6', 'protocol' => 'ipv6-icmp', 'icmp6-type' => '128,133,134,135,136',
-            'statetype' => 'keep', 'descr' => 'IPv6 requirements (ICMP)', 'from' => '::',
+            'statetype' => 'keep', 'descr' => 'IPv6 RFC4890 requirements (ICMP)', 'from' => '::',
             'to' => 'ff02::/16', 'direction' => 'in' ),
         $defaults['pass']
     );
@@ -275,13 +275,6 @@ function filter_core_rules_system($fw, $defaults)
         );
     }
     // CARP defaults
-    $carp_disabled = empty($config['hasync']) && empty($config['virtualip']['vip']);
-    $fw->registerFilterRule(
-        1,
-        array('protocol' => 'carp', 'descr' => 'CARP defaults', '#ref' => 'system_hasync.php',
-            'from' => '(self)', 'direction' => 'in', 'disabled' => !$carp_disabled),
-        $defaults['block']
-    );
     $fw->registerFilterRule(
         1,
         array('protocol' => 'carp', 'direction' => 'any', 'descr' => 'CARP defaults', '#ref' => 'firewall_virtual_ip.php'),
@@ -535,7 +528,7 @@ function filter_core_rules_system($fw, $defaults)
         }
     }
     // loopback
-    $fw->registerFilterRule(5, array('interface' => 'loopback', 'descr' => 'pass loopback'), $defaults['pass']);
+    $fw->registerFilterRule(5, array('interface' => 'lo0', 'descr' => 'pass loopback', 'statetype' => 'none'), $defaults['pass']);
     // out from this Firewall
     $fw->registerFilterRule(
         5,
@@ -548,7 +541,7 @@ function filter_core_rules_system($fw, $defaults)
         $fw->registerFilterRule(
             5,
             array('direction' => 'out', 'statetype' => 'keep', 'quick' => false, 'interface' => 'enc0',
-                '#ref' => 'vpn_ipsec.php#enable',
+                '#ref' => '/ui/ipsec/tunnels',
                 'descr' => 'IPsec internal host to host'),
             $defaults['pass']
         );
@@ -594,28 +587,29 @@ function filter_core_rules_system($fw, $defaults)
     if (empty($config['system']['pf_disable_force_gw'])) {
         foreach ($fw->getInterfaceMapping() as $ifdescr => $ifcfg) {
             if (!isset($ifcfg['internal_dynamic']) && $ifcfg['if'] != 'lo0') {
-                $intf_has_v4 = false;
-                $intf_has_v6 = false;
+                $protos_found = [];
+                $address_check = ['inet' => 'is_subnetv4', 'inet6' => 'is_subnetv6'];
                 foreach (array_keys(interfaces_addresses($ifcfg['if'], true, $fw->getIfconfigDetails())) as $addr) {
-                    $intf_has_v4 = $intf_has_v4 || is_subnetv4($addr);
-                    $intf_has_v6 = $intf_has_v6 || is_subnetv6($addr);
-                }
-                foreach ($fw->getInterfaceGateways($ifcfg['if']) as $gwname) {
-                    $gwproto = $fw->getGateway($gwname)['proto'];
-                    // only try to add gateway rules for traffic leaving this interface
-                    // when the correct protocol is assigned to the interface
-                    if (($gwproto == 'inet' && $intf_has_v4) || ($gwproto == 'inet6' && $intf_has_v6)) {
-                        $fw->registerFilterRule(
-                            100000,
-                            array('from' => $ifcfg['if'], 'direction' => 'out', 'gateway' => $gwname,
-                            'destination' => array('network' => $ifdescr, "not" => true),
-                            'statetype' => 'keep',
-                            'allowopts' => true,
-                            'quick' => false,
-                            '#ref' => 'system_advanced_firewall.php#pf_disable_force_gw',
-                            'descr' => "let out anything from firewall host itself (force gw)"),
-                            $defaults['pass']
-                        );
+                    foreach (['inet', 'inet6'] as $inet) {
+                        if (!in_array($inet, $protos_found) && $address_check[$inet]($addr)) {
+                            $gwname = $fw->getGateways()->getInterfaceGateway($ifdescr, $inet, true, 'name');
+                            if (!empty($gwname)) {
+                                // only try to add gateway rules for traffic leaving this interface
+                                // when the correct protocol is assigned to the interface
+                                $fw->registerFilterRule(
+                                    100000,
+                                    array('from' => "({$ifcfg['if']})", 'direction' => 'out', 'gateway' => $gwname,
+                                    'destination' => array('network' => $ifdescr, "not" => true),
+                                    'statetype' => 'keep',
+                                    'allowopts' => true,
+                                    'quick' => false,
+                                    '#ref' => 'system_advanced_firewall.php#pf_disable_force_gw',
+                                    'descr' => "let out anything from firewall host itself (force gw)"),
+                                    $defaults['pass']
+                                );
+                            }
+                            $protos_found[] = $inet;
+                        }
                     }
                 }
             }

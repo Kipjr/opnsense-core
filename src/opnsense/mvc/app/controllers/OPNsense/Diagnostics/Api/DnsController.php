@@ -38,12 +38,11 @@ use OPNsense\Core\Backend;
  */
 class DnsController extends ApiControllerBase
 {
-
     /**
      * perform a reverse dns lookup
      * @return array
      */
-    public function reverse_lookupAction()
+    public function reverseLookupAction()
     {
         if ($this->request->isGet() && $this->request->has('address')) {
             $this->sessionClose(); // long running action, close session

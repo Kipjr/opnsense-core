@@ -1,7 +1,7 @@
 <?php
 
 /*
- * Copyright (C) 2014-2016 Deciso B.V.
+ * Copyright (C) 2014-2021 Deciso B.V.
  * Copyright (C) 2003-2004 Manuel Kasper <mk@neon1.net>
  * Copyright (C) 2010 Seth Mos <seth.mos@dds.nl>
  * All rights reserved.
@@ -38,20 +38,53 @@ function reconfigure_dhcpd()
 {
     system_hosts_generate();
     clear_subsystem_dirty('hosts');
-    dhcpd_dhcp_configure(false, 'inet6');
+    dhcpd_dhcp6_configure();
     clear_subsystem_dirty('staticmaps');
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // handle identifiers and action
-    if (!empty($_GET['if']) && !empty($config['interfaces'][$_GET['if']])) {
+    if (!empty($_GET['if']) && !empty($config['interfaces'][$_GET['if']]) &&
+        isset($config['interfaces'][$_GET['if']]['enable']) &&
+        (is_ipaddr($config['interfaces'][$_GET['if']]['ipaddrv6']) ||
+        !empty($config['interfaces'][$_GET['if']]['dhcpd6track6allowoverride']))) {
         $if = $_GET['if'];
     } else {
         /* if no interface is provided this invoke is invalid */
         header(url_safe('Location: /index.php'));
         exit;
     }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // handle identifiers and actions
+    if (!empty($_POST['if']) && !empty($config['interfaces'][$_POST['if']])) {
+        $if = $_POST['if'];
+    }
+    if (!empty($_POST['act'])) {
+        $act = $_POST['act'];
+    } else {
+        $act = null;
+    }
+}
 
+$ifcfgip = $config['interfaces'][$if]['ipaddrv6'];
+$ifcfgsn = $config['interfaces'][$if]['subnetv6'];
+
+if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
+    list ($ifcfgip,, $ifcfgsn) = interfaces_primary_address6($if);
+    $prefix_array = array();
+    $prefix_array = explode(':', $ifcfgip);
+    $prefix_array[4] = '0';
+    $prefix_array[5] = '0';
+    $prefix_array[6] = '0';
+    $prefix_array[7] = '0';
+    $wifprefix = Net_IPv6::compress(implode(':', $prefix_array));
+    $pdlen = calculate_ipv6_delegation_length($config['interfaces'][$if]['track6-interface']) - 1;
+}
+
+$subnet_start = gen_subnetv6($ifcfgip, $ifcfgsn);
+$subnet_end = gen_subnetv6_max($ifcfgip, $ifcfgsn);
+
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $pconfig = array();
 
     if (!empty($config['dhcpdv6'][$if]['range'])) {
@@ -65,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
     $config_copy_fieldsnames = array('defaultleasetime', 'maxleasetime', 'domain', 'domainsearchlist', 'ddnsdomain',
         'ddnsdomainprimary', 'ddnsdomainkeyname', 'ddnsdomainkey', 'ddnsdomainalgorithm', 'bootfile_url', 'netmask',
-        'numberoptions', 'dhcpv6leaseinlocaltime', 'staticmap');
+        'numberoptions', 'dhcpv6leaseinlocaltime', 'staticmap', 'minsecs');
     foreach ($config_copy_fieldsnames as $fieldname) {
         if (isset($config['dhcpdv6'][$if][$fieldname])) {
             $pconfig[$fieldname] = $config['dhcpdv6'][$if][$fieldname];
@@ -92,15 +125,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
 } elseif ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // handle identifiers and actions
-    if (!empty($_POST['if']) && !empty($config['interfaces'][$_POST['if']])) {
-        $if = $_POST['if'];
-    }
-    if (!empty($_POST['act'])) {
-        $act = $_POST['act'];
-    } else {
-        $act = null;
-    }
     $pconfig = $_POST;
     $input_errors = array();
 
@@ -155,6 +179,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         if (!empty($pconfig['maxleasetime']) && (!is_numeric($pconfig['maxleasetime']) || ($pconfig['maxleasetime'] < 60) || ($pconfig['maxleasetime'] <= $_POST['defaultleasetime']))) {
             $input_errors[] = gettext("The maximum lease time must be at least 60 seconds and higher than the default lease time.");
         }
+        if (!empty($pconfig['minsecs']) && (!is_numeric($pconfig['minsecs']) || ($pconfig['minsecs'] < 0) || ($pconfig['minsecs'] > 255))) {
+            $input_errors[] = gettext("The response delay must be at least 0 and no more than 255 seconds.");
+        }
         if (!empty($pconfig['ddnsdomain']) && !is_domain($pconfig['ddnsdomain'])) {
             $input_errors[] = gettext("A valid domain name must be specified for the dynamic DNS registration.");
         }
@@ -186,11 +213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
 
         if (count($input_errors) == 0) {
-            /* make sure the range lies within the current subnet */
-            list ($ifcfgip, $ifcfgsn) = explode('/', find_interface_networkv6(get_real_interface($if, 'inet6'), false));
-            $subnet_start = gen_subnetv6($ifcfgip, $ifcfgsn);
-            $subnet_end = gen_subnetv6_max($ifcfgip, $ifcfgsn);
-
             $range_from = $pconfig['range_from'];
             $range_to = $pconfig['range_to'];
 
@@ -200,15 +222,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             }
 
             if (!empty($pconfig['range_from']) && !empty($pconfig['range_to'])) {
-                if (is_ipaddrv6($ifcfgip) && !empty($pconfig['range_from']) && !empty($pconfig['range_to'])) {
-                    if ((!is_inrange_v6($range_from, $subnet_start, $subnet_end)) ||
-                        (!is_inrange_v6($range_to, $subnet_start, $subnet_end))) {
-                        $input_errors[] = gettext("The specified range lies outside of the current subnet.");
-                    }
+               /* make sure the range lies within the current subnet */
+                if ((!is_inrange_v6($range_from, $subnet_start, $subnet_end)) ||
+                    (!is_inrange_v6($range_to, $subnet_start, $subnet_end))) {
+                    $input_errors[] = gettext('The specified range lies outside of the current subnet.');
                 }
 
+                /* single IP subnet does not have enough addresses */
+                if ($subnet_start == $subnet_end) {
+                    $input_errors[] = gettext('The range is unavailable (single host network mask /128 used).');
                 /* "from" cannot be higher than "to" */
-                if (inet_pton($pconfig['range_from']) > inet_pton($pconfig['range_to'])) {
+                } elseif (inet_pton($pconfig['range_from']) > inet_pton($pconfig['range_to'])) {
                     $input_errors[] = gettext("The range is invalid (first element higher than second element).");
                 }
 
@@ -241,7 +265,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             // simple 1-on-1 copy
             $config_copy_fieldsnames = array('defaultleasetime', 'maxleasetime', 'netmask', 'domainsearchlist',
               'ddnsdomain', 'ddnsdomainprimary', 'ddnsdomainkeyname', 'ddnsdomainkey', 'ddnsdomainalgorithm', 'bootfile_url',
-              'dhcpv6leaseinlocaltime');
+              'dhcpv6leaseinlocaltime', 'minsecs');
             foreach ($config_copy_fieldsnames as $fieldname) {
                 if (!empty($pconfig[$fieldname])) {
                     $dhcpdconf[$fieldname] = $pconfig[$fieldname];
@@ -325,20 +349,6 @@ $service_hook = 'dhcpd6';
 legacy_html_escape_form_data($pconfig);
 
 include("head.inc");
-
-list ($wifcfgip, $networkv6) = interfaces_primary_address6($if);
-$wifcfgsn = explode('/', $networkv6)[1];
-
-if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
-    $prefix_array = array();
-    $prefix_array = explode(':', $wifcfgip);
-    $prefix_array[4] = '0';
-    $prefix_array[5] = '0';
-    $prefix_array[6] = '0';
-    $prefix_array[7] = '0';
-    $wifprefix = Net_IPv6::compress(implode(':', $prefix_array));
-    $pdlen = calculate_ipv6_delegation_length($config['interfaces'][$if]['track6-interface']) - 1;
-}
 
 ?>
 <body>
@@ -449,11 +459,11 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                     </tr>
                     <tr>
                       <td><i class="fa fa-info-circle text-muted"></i> <?=gettext("Subnet");?></td>
-                      <td><?= gen_subnetv6($wifcfgip, $wifcfgsn) ?></td>
+                      <td><?= $subnet_start ?></td>
                     </tr>
                     <tr>
                       <td><i class="fa fa-info-circle text-muted"></i> <?=gettext("Subnet mask");?></td>
-                      <td><?= htmlspecialchars($wifcfgsn) ?> <?= gettext('bits') ?></td>
+                      <td><?= htmlspecialchars($ifcfgsn) ?> <?= gettext('bits') ?></td>
                     </tr>
 <?php if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])): ?>
                      <tr>
@@ -468,16 +478,21 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
 <?php endif ?>
 <?php endif ?>
                     <tr>
-                      <td><i class="fa fa-info-circle text-muted"></i> <?=gettext("Available range");?></td>
-                      <td>
-<?php
-                        $range_from = gen_subnetv6($wifcfgip, $wifcfgsn);
-                        $range_from++;
-                        $range_to = gen_subnetv6_max($wifcfgip, $wifcfgsn);?>
-                        <?=$range_from;?> - <?=$range_to;?>
 <?php if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])): ?>
-                        <br/>
-                        <?= gettext('Prefix subnet will be prefixed to the available range.') ?>
+                      <td><a id="help_for_available_range" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?= gettext('Available range') ?></td>
+<?php else: ?>
+                      <td><i class="fa fa-info-circle text-muted"></i> <?= gettext('Available range') ?></td>
+<?php endif ?>
+                      <td>
+<?php if ($subnet_start == $subnet_end): ?>
+                        <span class="text-danger"><?= gettext('No available address range for configured interface subnet size.') ?></span>
+<?php else: ?>
+                        <?= $subnet_start ?> - <?= $subnet_end ?>
+<?php endif ?>
+<?php if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])): ?>
+                        <div class="hidden" data-for="help_for_available_range">
+                            <?= gettext('Prefix subnet will be prefixed to the available range.') ?>
+                        </div>
 <?php endif ?>
                       </td>
                     </tr>
@@ -499,8 +514,8 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                           </tbody>
                         </table>
                         <div class="hidden" data-for="help_for_range">
-                            <?= gettext("When using a static WAN address, the range should be entered using the full IPv6 address. " .
-                            "When using a dynamic WAN address, only enter the suffix part (i.e. ::1:2:3:4)."); ?>
+                            <?= gettext("When using a static LAN address, the range should be entered using the full IPv6 address. " .
+                            "When using a delegated LAN address, only enter the suffix part (i.e. ::1:2:3:4)."); ?>
                       </td>
                     </tr>
                     <tr>
@@ -539,7 +554,7 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                           "The start and end of the range must end on boundaries of the prefix delegation size."); ?>
                            <?= gettext("Ensure that any prefix delegation range does not overlap the LAN prefix range."); ?>
                           <br/><br/>
-                          <?= gettext('The system does not check the validity of your emtry against the selected mask - please refer to an online net ' .
+                          <?= gettext('The system does not check the validity of your entry against the selected mask - please refer to an online net ' .
                             'calculator to ensure you have entered a correct range if the dhcpd6 server fails to start.') ?>
 <?php if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])): ?>
                           <br/><br/>
@@ -584,6 +599,16 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                         <div class="hidden" data-for="help_for_maxleasetime">
                           <?=gettext("This is the maximum lease time for clients that ask for a specific expiration time."); ?><br />
                           <?=gettext("The default is 86400 seconds.");?>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><a id="help_for_minsecs" href="#" class="showhelp"><i class="fa fa-info-circle"></i></a> <?=gettext("Response delay");?> (<?=gettext("seconds");?>)</td>
+                      <td>
+                       <input name="minsecs" type="text" value="<?=$pconfig['minsecs'];?>" />
+                        <div class="hidden" data-for="help_for_minsecs">
+                          <?=gettext("This is the minimum number of seconds since a client began trying to acquire a new lease before the DHCP server will respond to its request."); ?><br />
+                          <?=gettext("The default is 0 seconds (no delay).");?>
                         </div>
                       </td>
                     </tr>
@@ -737,7 +762,7 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                             </tfoot>
                           </table>
                           <div class="hidden" data-for="help_for_numberoptions">
-                          <?= sprintf(gettext("Enter the DHCP option number and the value for each item you would like to include in the DHCP lease information. For a list of available options please visit this %sURL%s."),'<a href="http://www.iana.org/assignments/bootp-dhcp-parameters/" target="_blank">','</a>') ?>
+                          <?= sprintf(gettext("Enter the DHCP option number and the value for each item you would like to include in the DHCP lease information. For a list of available options please visit this %sURL%s."),'<a href="https://www.iana.org/assignments/bootp-dhcp-parameters/" target="_blank">','</a>') ?>
                           </div>
                         </div>
                       </td>
@@ -768,7 +793,7 @@ if (isset($config['interfaces'][$if]['dhcpd6track6allowoverride'])) {
                       <td><?=gettext("Hostname");?></td>
                       <td><?=gettext("Description");?></td>
                       <td class="text-nowrap">
-                        <a href="services_dhcpv6_edit.php?if=<?=$if;?>" class="btn btn-default btn-xs"><i class="fa fa-plus fa-fw"></i></a>
+                        <a href="services_dhcpv6_edit.php?if=<?=$if;?>" class="btn btn-primary btn-xs"><i class="fa fa-plus fa-fw"></i></a>
                       </td>
                     </tr>
 <?php

@@ -2,7 +2,7 @@
 <?php
 
 /*
- * Copyright (C) 2017-2018 Franco Fichtner <franco@opnsense.org>
+ * Copyright (C) 2017-2021 Franco Fichtner <franco@opnsense.org>
  * Copyright (C) 2006 Scott Ullrich <sullrich@gmail.com>
  * Copyright (C) 2003-2005 Manuel Kasper <mk@neon1.net>
  * All rights reserved.
@@ -55,14 +55,13 @@ if (empty($argument)) {
     $interface_real = $argument;
 }
 
-$ip = get_interface_ip($interface);
-
 if (!isset($config['interfaces'][$interface]['enable'])) {
-    log_error("Interface '{$interface}' is disabled or empty, nothing to do.");
+    log_error("Interface '{$interface}' ($interface_real) is disabled or empty, nothing to do.");
     return;
 }
 
 $interface_descr = convert_friendly_interface_to_friendly_descr($interface);
+$ip = get_interface_ip($interface);
 
 log_error("On (IP address: {$ip}) (interface: {$interface_descr}[{$interface}]) (real interface: {$interface_real}).");
 
@@ -71,34 +70,27 @@ log_error("On (IP address: {$ip}) (interface: {$interface_descr}[{$interface}]) 
  * to reconfigure an interface.  OpenVPN might be in tap(4)
  * mode and not have an IP address.
  */
-if ((empty($ip) || !is_ipaddr($ip)) && substr($interface_real, 0, 4) != 'ovpn') {
+if (!is_ipaddr($ip) && substr($interface_real, 0, 4) != 'ovpn') {
     log_error("Failed to detect IP for {$interface_descr}[{$interface}]");
     return;
 }
 
-$configip = $config['interfaces'][$interface]['ipaddr'];
-
-$cacheip_file = "/var/db/{$interface}_cacheip";
-$ip_file = "/var/db/{$interface}_ip";
-
-if (is_ipaddr($ip)) {
-    @file_put_contents($ip_file, $ip);
-}
-
 interfaces_vips_configure(false, $interface);
 
-$gre = link_interface_to_gre($interface);
-if (!empty($gre)) {
-    array_walk($gre, 'interface_gre_configure');
-}
-$gif = link_interface_to_gif($interface);
-if (!empty($gif)) {
-    array_walk($gif, 'interface_gif_configure');
+$gres = link_interface_to_gre($interface);
+foreach ($gres as $gre) {
+    _interfaces_gre_configure($gre);
 }
 
-$bridgetmp = link_interface_to_bridge($interface);
-if (!empty($bridgetmp)) {
-    interface_bridge_add_member($bridgetmp, $interface_real);
+$gifs = link_interface_to_gif($interface);
+foreach ($gifs as $gif) {
+    _interfaces_gif_configure($gif);
+}
+
+$bridge = link_interface_to_bridge($interface);
+if (!empty($bridge)) {
+    /* XXX _interfaces_bridge_configure() is probably cleaner */
+    interface_bridge_add_member($bridge, $interface_real);
 }
 
 system_resolvconf_generate();
@@ -114,50 +106,65 @@ if (isset($config['interfaces'][$interface]['ipaddrv6'])) {
             break;
         case 'dhcp6':
         case 'slaac':
-            if (!isset($config['interfaces'][$interface]['dhcp6usev4iface'])) {
-                break;
+            if (isset($config['interfaces'][$interface]['dhcp6usev4iface'])) {
+                interface_dhcpv6_prepare($interface, $config['interfaces'][$interface]);
+                interface_dhcpv6_configure($interface, $config['interfaces'][$interface]);
             }
-            interface_dhcpv6_prepare($interface, $config['interfaces'][$interface]);
-            interface_dhcpv6_configure($interface, $config['interfaces'][$interface]);
             break;
        default:
-            if (!isset($config['interfaces'][$interface]['dhcp6usev4iface'])) {
-                break;
+            if (isset($config['interfaces'][$interface]['dhcp6usev4iface'])) {
+                interface_static6_configure($interface, $config['interfaces'][$interface]);
             }
-            interface_static6_configure($interface, $config['interfaces'][$interface]);
             break;
     }
 }
 
-if (isset($config['gifs']['gif']) && is_array($config['gifs']['gif'])){
-    foreach ($config['gifs']['gif'] as $gif) {
-        if ($gif['if'] == $interface) {
-            foreach (legacy_config_get_interfaces(array("virtual" => false)) as $ifname => $ifparent) {
-                if (($ifparent['if'] == $gif['gifif']) && (isset($ifparent['enable']))) {
-                  $gif['gifif'] = interface_gif_configure($gif);
-                  $confif = convert_real_interface_to_friendly_interface_name($gif['gifif']);
-                  if (!empty($confif)) {
-                      interface_configure(false, $confif);
-                  }
-                  system_routing_configure(false, $ifname);
-                }
-            }
+$restartifs = [];
+
+foreach (legacy_config_get_interfaces(['enable' => true, 'virtual' => false]) as $ifname => $ifparent) {
+    foreach ($gifs as $gif) {
+        if ($ifparent['if'] == $gif['gifif']) {
+            $restartifs[$ifname] = 1;
+        }
+    }
+
+    foreach ($gres as $gre) {
+        if ($ifparent['if'] == $gre['greif']) {
+            $restartifs[$ifname] = 1;
         }
     }
 }
 
-$cacheip = @file_get_contents($cacheip_file);
+foreach (array_keys($restartifs) as $ifname) {
+    interface_configure(false, $ifname);
+    system_routing_configure(false, $ifname);
+}
 
-if (!is_ipaddr($cacheip) || $ip != $cacheip || !is_ipaddr($configip)) {
-    @unlink($cacheip_file);
+/*
+ * Interface reconfigure finished here so sync
+ * firewall groups in case of destroy/create use.
+ */
+ifgroup_setup();
 
+$cacheip_file = "/tmp/{$interface_real}_oldip";
+$cacheip = trim(@file_get_contents($cacheip_file));
+
+if ($ip != $cacheip || !is_ipaddr($config['interfaces'][$interface]['ipaddr'])) {
     system_routing_configure(false, $interface);
     plugins_configure('monitor');
-    filter_configure_sync(false, isset($config['system']['ip_change_kill_states']));
+    filter_configure_sync();
 
-    if (is_ipaddr($ip)) {
-        @file_put_contents($cacheip_file, $ip);
+    if (isset($config['system']['ip_change_kill_states'])) {
+        /* XXX maybe eventually ip_change_kill_states should be removed */
+        log_error('IP address renew, killing all previous states');
+        mwexec('/sbin/pfctl -Fs');
+    } else if (is_ipaddr($cacheip) && $ip != $cacheip) {
+        log_error("IP address change detected, killing states of old ip $cacheip");
+        mwexecf('/sbin/pfctl -k 0.0.0.0/0 -k %s', $cacheip);
+        mwexecf('/sbin/pfctl -k %s', $cacheip);
     }
+
+    @file_put_contents($cacheip_file, $ip . PHP_EOL);
 
     plugins_configure('vpn', false, array($interface));
     plugins_configure('newwanip', false, array($interface));
